@@ -1,0 +1,10 @@
+
+.snakemake
+config
+__pycache__
+*.log
+*egg-info
+.idea
+output/
+Snakefile
+run_snakemake.sh
