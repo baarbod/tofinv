@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-import os
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
@@ -8,16 +6,11 @@ from pathlib import Path
 from omegaconf import OmegaConf
 from skopt import gp_minimize
 from skopt.plots import plot_convergence, plot_evaluations
-from scipy.signal import find_peaks
 
-import tofmodel.inverse.evaluation as eval
-import tofmodel.inverse.utils as utils
+import tofinv.evaluation as eval
+import tofinv.utils as utils
 
-# --- HELPER FUNCTIONS (Exposed for both Optimization and Aggregation) ---
-
-def psd_channels(x, fs=1/0.378):
-    X = np.fft.rfft(x, axis=0)
-    return np.abs(X)
+# --- HELPER FUNCTIONS ---
 
 def transform(vbase, params, phase_input):
     v_scale, fg_end, mu, alpha = params
@@ -28,39 +21,36 @@ def transform(vbase, params, phase_input):
     weight = mag_norm ** alpha
     weighted_gain = 1 + (gain_curve - 1) * weight
     V_scaled = V * weighted_gain
-    return utils.define_velocity_fourier(V_scaled, 300, phase_input, 0)
+    voffset = 0 # HARD CODED
+    return utils.define_velocity_fourier(V_scaled, vbase.size, phase_input, voffset)
 
-def rfft_freqs_and_spectrum(x, demean=True):
+def rfft_freqs_and_spectrum(x, tr=0.378, demean=True):
     if demean: x = x - x.mean()
-    freqs = np.fft.rfftfreq(len(x), d=0.378)
-    mag = psd_channels(x)
+    freqs = np.fft.rfftfreq(len(x), d=tr)
+    mag = np.fft.rfft(x, axis=0)
     return freqs, mag
 
 def compute_err(x1, x2, rms):
-    """Multichannel Weighted Log-MAE: Peak detection per channel."""
     eps = 1e-12
     min_len = min(len(x1), len(x2))
     
     log_x1 = np.log(x1[:min_len, :] + eps)
     log_x2 = np.log(x2[:min_len, :] + eps)
     
-    n_freqs = x1.shape[0]
-    freq_weights = np.linspace(1, 1, n_freqs) ** 2 
-    
     total_loss = 0
     for i in range(3):
-        target_chan = x2[:min_len, i]
-        peaks, _ = find_peaks(target_chan, prominence=np.mean(target_chan))
-        
-        weights = np.ones(min_len)
-        weights[peaks] = 1.0
-        
         diff = np.abs(log_x1[:, i] - log_x2[:, i])
-        weighted_diff = diff * weights * freq_weights
-        chan_loss = np.sum(weighted_diff)
+        chan_loss = np.sum(diff)
         total_loss += chan_loss * (1 / (rms[i] + 1e-6))
         
     return total_loss
+
+def get_steady_state_constant(sp):
+    """Computes the theoretical steady state signal (mT_ss)."""
+    fa_rad = np.radians(sp.flip_angle)
+    exp_tr_t1 = np.exp(-sp.repetition_time / sp.t1_time)
+    exp_te_t2 = np.exp(-sp.echo_time / sp.t2_time)
+    return np.sin(fa_rad) * exp_te_t2 * (1 - exp_tr_t1) / (1 - exp_tr_t1 * np.cos(fa_rad))
 
 # --- CORE OPTIMIZATION LOGIC ---
 
@@ -68,16 +58,19 @@ def run_optimization(signal_path, area_path, config_path, outdir):
     param = OmegaConf.load(config_path)
     num_offset = param.scan_param.num_pulse_baseline_offset
     
+    # steady state magnetization constant 
+    mT_ss = get_steady_state_constant(param.scan_param)
+    tr = param.scan_param.repetition_time
+    
     outdir = Path(outdir)
     plots_dir = outdir / 'plots'
     plots_dir.mkdir(parents=True, exist_ok=True)
     
     # Load data
-    # Note: Use the area_path provided by args, but fallback logic can be added
     s_raw_full, xarea, area = eval.load_data(signal_path, area_path, param)
     
-    window_size = 300
-    nwindows = 1#s_raw_full.shape[0] // window_size
+    window_size = param.synthetic.num_time_point
+    nwindows = np.min([s_raw_full.shape[0] // window_size, 3]) 
     all_v_bases, all_opt_params = [], []
 
     for i in range(nwindows):
@@ -85,17 +78,19 @@ def run_optimization(signal_path, area_path, config_path, outdir):
         s_raw = s_raw_full[i*window_size : (i+1)*window_size, :]
         v_base = (s_raw[:, 0] - s_raw[:, 0].mean()) / (s_raw[:, 0].max() + 1e-9)
         phase = np.angle(np.fft.rfft(v_base))
-
-        s_target = eval.scale_data(s_raw[num_offset:, :])
-        psd_measured = psd_channels(s_target)
+        s_target = utils.scale_data_baseline(s_raw[num_offset:, :])
+        
+        psd_measured = np.fft.rfft(s_target, axis=0)
         rms = np.sqrt(np.mean(psd_measured**2, axis=0))
 
         def objective(p):
             v_opt = transform(v_base, p, phase)
             ssim = eval.run_forward_model(v_opt, xarea, area, param)[num_offset:, :]
-            psd_sim = psd_channels(eval.scale_data(ssim))
+            ssim_scaled = ssim / mT_ss
+            psd_sim = np.fft.rfft(ssim_scaled, axis=0)
             return compute_err(psd_sim, psd_measured, rms) if not np.any(np.isnan(psd_sim)) else 1e6
 
+        # NEED TO FIX HARD CODED BOUNDS
         res = gp_minimize(objective, [(1e-4, 1.0), (1.0, 20.0), (0.5, 3.0), (1e-4, 2.0)], 
                           n_calls=20, n_initial_points=10, acq_func="gp_hedge")
         
@@ -103,17 +98,14 @@ def run_optimization(signal_path, area_path, config_path, outdir):
         all_opt_params.append(res.x)
 
         # ---------------- DIAGNOSTIC FIGURES ----------------
-        # 1. Generate the optimized velocity and model prediction
+        # Generate the optimized velocity and model prediction
         v_opt = transform(v_base, res.x, phase)
         
-        # Run forward model (using variables available in loop scope)
+        # Run forward model
         ssim_opt_full = eval.run_forward_model(v_opt, xarea, area, param)
         ssim_opt = ssim_opt_full[num_offset:, :]
+        ssim_opt_plot = ssim_opt / mT_ss
         
-        # Scale for visualization
-        s_plot = eval.scale_data(s_target)
-        ssim_opt_plot = eval.scale_data(ssim_opt)
-
         # 2. Time-Domain Figure
         fig_td, axes = plt.subplots(1, 4, figsize=(14, 3))
         axes[0].plot(v_base, color='gray')
@@ -123,7 +115,7 @@ def run_optimization(signal_path, area_path, config_path, outdir):
         axes[1].set_title('Opt-v (Transformed)')
         
         for ch in range(3):
-            axes[2].plot(s_plot[:, ch], alpha=0.7)
+            axes[2].plot(s_target[:, ch], alpha=0.7)
         axes[2].set_title('Measured Signal (S)')
         
         for ch in range(3):
@@ -133,11 +125,12 @@ def run_optimization(signal_path, area_path, config_path, outdir):
         for ax in axes: ax.set_xlabel('Frames')
         plt.tight_layout()
         fig_td.savefig(plots_dir / f'Results_TD_win{i}.png')
-
+        plt.close(fig_td)
+        
         # 3. Frequency-Domain Figure
         fig_fd, axes = plt.subplots(1, 4, figsize=(14, 3))
-        freqs, m_base = rfft_freqs_and_spectrum(v_base)
-        _, m_opt = rfft_freqs_and_spectrum(v_opt)
+        freqs, m_base = rfft_freqs_and_spectrum(v_base, tr=tr)
+        _, m_opt = rfft_freqs_and_spectrum(v_opt, tr=tr)
         
         axes[0].plot(freqs, m_base, color='gray')
         axes[0].set_title('Base PSD')
@@ -146,12 +139,12 @@ def run_optimization(signal_path, area_path, config_path, outdir):
         axes[1].set_title('Opt PSD')
         
         for ch in range(3):
-            f, m = rfft_freqs_and_spectrum(s_plot[:, ch])
+            f, m = rfft_freqs_and_spectrum(s_target[:, ch], tr=tr)
             axes[2].plot(f, m, alpha=0.7)
         axes[2].set_title('Measured PSD')
         
         for ch in range(3):
-            f, m = rfft_freqs_and_spectrum(ssim_opt_plot[:, ch])
+            f, m = rfft_freqs_and_spectrum(ssim_opt_plot[:, ch], tr=tr)
             axes[3].plot(f, m, alpha=0.7)
         axes[3].set_title('Simulated PSD')
         
@@ -194,8 +187,8 @@ def aggregate_optim(search_dir, outfile):
 
         for p, v in zip(params_mat, vels_mat):
             v_opt = transform(v, p, np.angle(np.fft.rfft(v)))
-            _, mag = rfft_freqs_and_spectrum(v_opt)
-            if mag.size == 151: amps.append(mag)
+            mag = np.fft.rfft(v_opt, axis=0)
+            if mag.size == 151: amps.append(mag) # HARDCODED, NEED TO FIX
 
     X = np.array(amps)
     X = X[np.all(X >= 0, axis=1)]
