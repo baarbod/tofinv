@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from scipy.ndimage import center_of_mass
 import argparse
+import pickle
 
 def add_boundary(A, depthfromslc1):
     # adds a wide area at each end of the vector to mimic the 
@@ -79,26 +80,55 @@ def compute_area(func_path, anat_path, aseg_path, reg_path, output_path):
 
     # Plot
     plt.figure()
-    plt.plot(depth_cm, A_cm2, marker='o')
+    plt.plot(depth_cm, A_cm2, marker='.')
     plt.xlabel("Distance from 1st fMRI slice (cm)")
     plt.ylabel("Cross-sectional Area (cm²)")
     plt.title("4th ventricle area-depth profile")
     plt.savefig(out_dir / "area_vs_depth.png")
     plt.close()
 
+# def aggregate_area(input_manifest, outdir):
+#     area_col = Path(outdir) / "area_collection"
+#     area_col.mkdir(parents=True, exist_ok=True)
+    
+#     with open(input_manifest, 'r') as f:
+#         for line in f:
+#             if not line.strip(): continue
+#             file_path, sub, ses = line.strip().split('\t')
+#             src = Path(file_path)
+#             if src.exists():
+#                 data = np.loadtxt(src) # Files are already scaled by compute_area
+#                 np.savetxt(area_col / f"{sub}_area.txt", data, fmt="%.6f")
+#                 print(f"[+] Collected: {sub}")
+
 def aggregate_area(input_manifest, outdir):
-    area_col = Path(outdir) / "area_collection"
-    area_col.mkdir(parents=True, exist_ok=True)
+    outdir_path = Path(outdir)
+    outdir_path.mkdir(parents=True, exist_ok=True)
+    
+    xarea_all = []
+    area_all = []
     
     with open(input_manifest, 'r') as f:
         for line in f:
             if not line.strip(): continue
             file_path, sub, ses = line.strip().split('\t')
             src = Path(file_path)
+            
             if src.exists():
-                data = np.loadtxt(src) # Files are already scaled by compute_area
-                np.savetxt(area_col / f"{sub}_area.txt", data, fmt="%.6f")
+                data = np.loadtxt(src) 
+                xarea_all.append(data[:, 0])
+                area_all.append(data[:, 1])
                 print(f"[+] Collected: {sub}")
+
+    # Define the output pickle path
+    pkl_path = outdir_path / "area_collection.pkl"
+    
+    # Save the variables as a tuple to match your loading logic
+    with open(pkl_path, 'wb') as f:
+        pickle.dump((xarea_all, area_all), f)
+        
+    print(f"\n[!] Successfully saved aggregated areas to: {pkl_path}")
+
 
 def main():
     parser = argparse.ArgumentParser()
