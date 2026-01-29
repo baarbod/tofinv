@@ -5,7 +5,6 @@ import nibabel as nib
 import numpy as np
 from scipy import ndimage
 import surfa as sf
-from omegaconf import OmegaConf
 from autocsfmask.automask import run_automask
 
 
@@ -25,7 +24,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run automask with CLI inputs.")
     parser.add_argument("--func", required=True)
     parser.add_argument("--sbref", required=True)
-    parser.add_argument("--config", required=True)
+    parser.add_argument("--nslice_to_keep", required=True, type=int)
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--container", required=True, help="Path to freesurfer container file")
     parser.add_argument("--container_bind", required=True, help="Paths to bind for apptainer")
@@ -33,9 +32,6 @@ def main():
 
     outdir = pathlib.Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    
-    param = OmegaConf.load(args.config)
-    nslice = param.nslice_to_use + 1
 
     sbref_fixed = outdir / "SBRef_fixed.nii.gz"
     fix_sbref(args.sbref, sbref_fixed)
@@ -45,7 +41,7 @@ def main():
     print(f"[*] Running SynthSeg via {args.container}")
     subprocess.run([
         "apptainer", "exec", "-B", args.container_bind,
-        container, "mri_synthseg", "--i", str(sbref_fixed), "--o", str(outdir)
+        container, "mri_synthseg", "--i", str(sbref_fixed), "--o", str(outdir),
     ], check=True)
 
     # 2. Mask Dilated Post-processing
@@ -54,10 +50,10 @@ def main():
     mask = resampled == 15  # CSF label
     
     # Dilate mask to ensure coverage
-    dilated = ndimage.binary_dilation(mask.data[:, :, :nslice], structure=ndimage.generate_binary_structure(3, 4), iterations=1)
+    dilated = ndimage.binary_dilation(mask[:, :, :args.nslice_to_keep], structure=ndimage.generate_binary_structure(3, 4), iterations=1)
     
     # Handle empty slices by propagating neighboring slice masks
-    for islice in range(nslice - 1):
+    for islice in range(args.nslice_to_keep - 1):
         if np.sum(dilated[:, :, islice]) == 0:
             dilated[:, :, islice] = dilated[:, :, islice + 1]
     if np.sum(dilated[:, :, -1]) == 0:
@@ -71,7 +67,8 @@ def main():
         func=args.func,
         sbref=str(sbref_fixed),
         synthseg=str(mask_path),
-        outdir=str(outdir)
+        outdir=str(outdir),
+        metrics_list_names=['sbref']
     )
 
 if __name__ == "__main__":
