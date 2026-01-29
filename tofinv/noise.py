@@ -6,7 +6,6 @@ import nibabel as nib
 import pickle
 import surfa as sf
 from pathlib import Path
-from omegaconf import OmegaConf
 
 def extract_noise(func_file, synthseg_file, sbref_file, outdir, num_end_slices=2):
     """Extracts noise timeseries from the top slices of the CSF mask."""
@@ -38,11 +37,8 @@ def extract_noise(func_file, synthseg_file, sbref_file, outdir, num_end_slices=2
     np.savetxt(out_file, psc, fmt="%.6f")
     print(f"[+] Saved noise signal {psc.shape} to {out_file}")
 
-def aggregate_noise(search_dir, outfile, config_path):
+def aggregate_noise(search_dir, outfile, desired_sample_length=300):
     """Finds all noise.txt files in a directory and pickles them into a bank."""
-    param = OmegaConf.load(config_path)
-    desired_length = param.data_simulation.input_feature_size
-    
     search_path = Path(search_dir)
     files = list(search_path.rglob("noise.txt"))
     print(f"[*] Found {len(files)} noise files. Aggregating...")
@@ -54,11 +50,11 @@ def aggregate_noise(search_dir, outfile, config_path):
             ts = ts[None, :]
         
         nvoxel, ntime = ts.shape
-        nbatch = int(ntime / desired_length)
+        nbatch = int(ntime / desired_sample_length)
         if nbatch == 0: continue
             
-        ts_trimmed = ts[:, :nbatch * desired_length]
-        ts_rs = ts_trimmed.reshape((nbatch * nvoxel, desired_length))
+        ts_trimmed = ts[:, :nbatch * desired_sample_length]
+        ts_rs = ts_trimmed.reshape((nbatch * nvoxel, desired_sample_length))
         all_psc_reshaped.append(ts_rs)
 
     combined = np.vstack(all_psc_reshaped)
@@ -78,14 +74,14 @@ def main():
     # Common/Agg Args
     parser.add_argument("--outdir", type=str, help="Search dir for collect, or output dir for extraction")
     parser.add_argument("--outfile", type=str, help="Path for the final .pkl bank")
-    parser.add_argument("--config", type=str)
+    parser.add_argument("--desired_sample_length", type=int)
     
     args = parser.parse_args()
 
     if args.collect:
-        if not args.outdir or not args.outfile or not args.config:
-            raise ValueError("Aggregation requires --outdir, --outfile, and --config")
-        aggregate_noise(args.outdir, args.outfile, args.config)
+        if not args.outdir or not args.outfile or not args.desired_sample_length:
+            raise ValueError("Aggregation requires --outdir, --outfile, and --desired_sample_length")
+        aggregate_noise(args.outdir, args.outfile, args.desired_sample_length)
     else:
         if not args.func or not args.outdir:
             raise ValueError("Extraction requires --func and --outdir")
