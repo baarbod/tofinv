@@ -3,8 +3,9 @@
 config
 __pycache__
 *.log
+logs*
 *egg-info
 .idea
-output/
-Snakefile
+output*
+Snakefile*
 run_snakemake.sh
