@@ -83,7 +83,7 @@ def run_forward_model(velocity_NN, xarea, area, param, ncpu=8):
     s_sim_raw = tm.simulate_inflow(
         sp.repetition_time, sp.echo_time, velocity_NN.size + sp.num_pulse_baseline_offset,
         sp.slice_width, sp.flip_angle, sp.t1_time, sp.t2_time, sp.num_slice, 
-        sp.alpha_list, sp.MBF, pos_func, ncpu=ncpu
+        sp.alpha_list, sp.MBF, pos_func, ncpu=ncpu, varysliceprofile=False
     )
     return s_sim_raw[sp.num_pulse_baseline_offset:, :param.nslice_to_use]
 
