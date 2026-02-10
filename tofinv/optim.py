@@ -4,10 +4,11 @@ import matplotlib.pyplot as plt
 import pickle
 from pathlib import Path
 from omegaconf import OmegaConf
-from skopt import gp_minimize
+from skopt import gp_minimize, dump
 from skopt.plots import plot_convergence, plot_evaluations
 import tofinv.evaluation as eval
 import tofinv.utils as utils
+import skopt
 
 # --- HELPER FUNCTIONS ---
 
@@ -32,33 +33,23 @@ def compute_err(x1, x2, rms):
     eps = 1e-12
     min_len = min(len(x1), len(x2))
     
+    nslice = len(rms)
     log_x1 = np.log(x1[:min_len, :] + eps)
     log_x2 = np.log(x2[:min_len, :] + eps)
     
     total_loss = 0
-    for i in range(3):
+    for i in range(nslice):
         diff = np.abs(log_x1[:, i] - log_x2[:, i])
         chan_loss = np.sum(diff)
-        total_loss += chan_loss * (1 / (rms[i] + 1e-6))
+        total_loss += chan_loss# * (1 / (rms[i] + 1e-6))
         
     return total_loss
-
-def get_steady_state_constant(sp):
-    """Computes the theoretical steady state signal (mT_ss)."""
-    fa_rad = np.radians(sp.flip_angle)
-    exp_tr_t1 = np.exp(-sp.repetition_time / sp.t1_time)
-    exp_te_t2 = np.exp(-sp.echo_time / sp.t2_time)
-    return np.sin(fa_rad) * exp_te_t2 * (1 - exp_tr_t1) / (1 - exp_tr_t1 * np.cos(fa_rad))
 
 # --- CORE OPTIMIZATION LOGIC ---
 
 def run_optimization(signal_path, area_path, config_path, baseline_path, outdir):
     param = OmegaConf.load(config_path)
-    num_offset = param.scan_param.num_pulse_baseline_offset
     nslice = param.nslice_to_use
-    
-    # steady state magnetization constant 
-    mT_ss = get_steady_state_constant(param.scan_param)
     tr = param.scan_param.repetition_time
     
     outdir = Path(outdir)
@@ -71,9 +62,6 @@ def run_optimization(signal_path, area_path, config_path, baseline_path, outdir)
     window_size = param.synthetic.num_time_point
     nwindows = np.min([s_raw_full.shape[0] // window_size, 3]) 
     all_v_bases, all_opt_params = [], []
-
-    # load baseline_ref
-    baseline_ref = np.loadtxt(baseline_path)
     
     for i in range(nwindows):
         print(f"[*] Optimizing Window {i}...")
@@ -81,46 +69,45 @@ def run_optimization(signal_path, area_path, config_path, baseline_path, outdir)
         v_base = (s_raw[:, 0] - s_raw[:, 0].mean()) / (s_raw[:, 0].max() + 1e-9)
         phase = np.angle(np.fft.rfft(v_base))
         
-        s_target = s_raw / baseline_ref
+        s_target = utils.scale_data(s_raw)
         
         psd_measured = np.abs(np.fft.rfft(s_target, axis=0))
         rms = np.sqrt(np.mean(psd_measured**2, axis=0))
-
-        mean_measured = np.mean(s_target, axis=0)
         
         def objective(p):
             v_opt = transform(v_base, p, phase)
-            ssim = eval.run_forward_model(v_opt, xarea, area, param)[num_offset:, :]
-            ssim_scaled = ssim / mT_ss
-            
-            # --- Frequency Domain Error ---
+            ssim = eval.run_forward_model(v_opt, xarea, area, param, ncpu=10)#[num_offset:, :]
+            ssim_scaled = utils.scale_data(ssim)
             psd_sim = np.abs(np.fft.rfft(ssim_scaled, axis=0))
             if np.any(np.isnan(psd_sim)):
                 return 1e6
-            
             freq_err = compute_err(psd_sim, psd_measured, rms)
-            
-            # --- Mean Difference Error (Time Domain) ---
-            mu_sim = np.mean(ssim_scaled, axis=0)
-            mean_err = np.sum(np.abs(mu_sim - mean_measured))
-            
-            # --- Combined Loss ---
-            return freq_err + (1.0 * mean_err)
+            return freq_err
 
         # NEED TO FIX HARD CODED BOUNDS
-        res = gp_minimize(objective, [(1e-7, 2.0), (1.0, 2.0), (0.25, 14.0), (1e-7, 3.0), (-0.3, 0.3)], 
-                          n_calls=60, n_initial_points=30, acq_func="gp_hedge", initial_point_generator='lhs')
+        res = gp_minimize(objective, [(1e-8, 4.0), (0.25, 2.0), (0.25, 16.0), (1e-8, 4.0), (-0.15, 0.15)], 
+                          n_calls=250, n_initial_points=200, 
+                          acq_func="gp_hedge", 
+                          initial_point_generator='lhs', 
+                          acq_optimizer='lbfgs')
+
         all_v_bases.append(v_base)
         all_opt_params.append(res.x)
 
+        # Delete the problematic references
+        if 'callbacks' in res.specs:
+            del res.specs['callbacks']
+        res.specs['args']['func'] = None 
+
+        dump(res, outdir / f'optim_result_win{i}.pkl')
+        
         # ---------------- DIAGNOSTIC FIGURES ----------------
         # Generate the optimized velocity and model prediction
         v_opt = transform(v_base, res.x, phase)
         
         # Run forward model
-        ssim_opt_full = eval.run_forward_model(v_opt, xarea, area, param)
-        ssim_opt = ssim_opt_full[num_offset:, :]
-        ssim_opt_plot = ssim_opt / mT_ss
+        ssim_opt = eval.run_forward_model(v_opt, xarea, area, param, ncpu=24)        
+        ssim_opt_plot = utils.scale_data(ssim_opt)
         
         # 2. Time-Domain Figure
         fig_td, axes = plt.subplots(2, 2, figsize=(8, 7), sharey='row')
@@ -190,27 +177,45 @@ def run_optimization(signal_path, area_path, config_path, baseline_path, outdir)
 
 def aggregate_optim(search_dir, outfile):
     search_path = Path(search_dir)
-    amps = []
+    data_triplets = [] # Renamed from pairs to reflect 3 elements
     
-    # Find all param files and their corresponding base velocities
-    for p_file in search_path.rglob("optim_param.txt"):
-        v_file = p_file.parent / "base_velocity.txt"
-        if not v_file.exists(): continue
+    # We look for the individual window results saved via skopt.dump
+    result_files = sorted(list(search_path.rglob("optim_result_win*.pkl")))
+    
+    for res_file in result_files:
+        # --- SUBJECT EXTRACTION ---
+        parts = res_file.parts
+        try:
+            sub_idx = parts.index("subjects")
+            subject_name = parts[sub_idx + 1]
+        except (ValueError, IndexError):
+            subject_name = res_file.parents[3].name if len(res_file.parents) > 3 else "unknown"
+
+        # Load the full skopt result object
+        res = skopt.load(res_file)
         
-        params_mat = np.atleast_2d(np.loadtxt(p_file))
-        vels_mat = np.atleast_2d(np.loadtxt(v_file))
-        if vels_mat.shape[0] > vels_mat.shape[1]: vels_mat = vels_mat.T
+        # Load the corresponding base velocities
+        v_base_path = res_file.parent / "base_velocity.txt"
+        
+        if v_base_path.exists():
+            v_bases = np.loadtxt(v_base_path)
+            try:
+                win_idx = int(res_file.stem.split('win')[-1])
+                if v_bases.ndim > 1:
+                    v_base = v_bases[:, win_idx]
+                else:
+                    v_base = v_bases
+                
+                # Store as a triplet: (v_base, res, subject_name)
+                data_triplets.append((v_base, res, subject_name))
+                
+            except Exception as e:
+                print(f"Error matching {res_file.name} to v_base: {e}")
 
-        for p, v in zip(params_mat, vels_mat):
-            v_opt = transform(v, p, np.angle(np.fft.rfft(v)))
-            mag = np.fft.rfft(v_opt, axis=0)
-            if mag.size == 151: amps.append(mag) # HARDCODED, NEED TO FIX
-
-    X = np.array(amps)
-    X = X[np.all(X >= 0, axis=1)]
     with open(outfile, "wb") as f:
-        pickle.dump(X, f)
-    print(f"[+] Aggregated {len(X)} samples to {outfile}")
+        pickle.dump(data_triplets, f)
+        
+    print(f"[+] Aggregated {len(data_triplets)} (v_base, res, subject) triplets to {outfile}")
 
 def main():
     parser = argparse.ArgumentParser()
