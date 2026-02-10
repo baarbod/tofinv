@@ -83,33 +83,134 @@ def run_forward_model(velocity_NN, xarea, area, param, ncpu=8):
     s_sim_raw = tm.simulate_inflow(
         sp.repetition_time, sp.echo_time, velocity_NN.size + sp.num_pulse_baseline_offset,
         sp.slice_width, sp.flip_angle, sp.t1_time, sp.t2_time, sp.num_slice, 
-        sp.alpha_list, sp.MBF, pos_func, ncpu=ncpu, varysliceprofile=False
+        sp.alpha_list, sp.MBF, pos_func, ncpu=ncpu, varysliceprofile=False, dx=0.005, offset_fact=0, enable_logging=True
     )
     return s_sim_raw[sp.num_pulse_baseline_offset:, :param.nslice_to_use]
 
 # --- IO & Visualization ---
 
 def save_and_plot(outdir, velocity, sraw_scaled, ssim_scaled, tr):
+    """
+    Saves data to text files and generates a 3x2 summary plot:
+    - Left Column: Time Domain (Input, Velocity, Simulated) - Matched Scales for Signals
+    - Right Column: Frequency Domain (Input, Velocity, Simulated) - Matched Scales for Signals, DC removed
+    """
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     
-    # Save raw data
+    # --- 1. Save Raw Data ---
     np.savetxt(outdir / 'signal_data.txt', sraw_scaled)
     np.savetxt(outdir / 'velocity_predicted.txt', velocity)
     np.savetxt(outdir / 'signal_simulation.txt', ssim_scaled)
 
-    # Time domain plot
+    # --- 2. Setup Plot Layout ---
+    fig, axes = plt.subplots(3, 2, figsize=(16, 10), constrained_layout=True)
+    
+    # Time vector
     t_vec = tr * np.arange(velocity.size)
-    fig, axes = plt.subplots(3, 1, figsize=(8, 10))
-    axes[0].plot(t_vec, sraw_scaled[:velocity.size])
-    axes[0].set_title("Input Signal (Scaled)")
-    axes[1].plot(t_vec, velocity, color='black')
-    axes[1].set_title("Inferred Velocity")
-    axes[2].plot(t_vec, ssim_scaled)
-    axes[2].set_title("Simulated Signal (Scaled)")
-    plt.tight_layout()
-    fig.savefig(outdir / "summary_plot.png")
+    
+    # Frequency vector (one-sided FFT)
+    n = velocity.size
+    freqs = np.fft.rfftfreq(n, d=tr)
+    
+    # Helper to compute Magnitude Spectrum
+    def get_spectrum(signal):
+        fft_res = np.fft.rfft(signal, axis=0)
+        return np.abs(fft_res)
 
+    # --- 3. Compute Spectra First (needed for scaling) ---
+    # Slice sraw to match velocity length
+    sraw_view = sraw_scaled[:velocity.size]
+    
+    sraw_spec = get_spectrum(sraw_view)
+    ssim_spec = get_spectrum(ssim_scaled)
+    vel_spec = get_spectrum(velocity)
+
+    # --- 4. Calculate Shared Limits (Time Domain) ---
+    t_min = min(np.min(sraw_view), np.min(ssim_scaled))
+    t_max = max(np.max(sraw_view), np.max(ssim_scaled))
+    t_range = t_max - t_min if t_max != t_min else 1.0
+    ylim_time = (t_min - 0.05 * t_range, t_max + 0.05 * t_range)
+
+    # --- 5. Calculate Shared Limits (Freq Domain) ---
+    # Important: Ignore index 0 (DC component) for limit calculation
+    f_min = min(np.min(sraw_spec[1:]), np.min(ssim_spec[1:]))
+    f_max = max(np.max(sraw_spec[1:]), np.max(ssim_spec[1:]))
+    
+    # Since we are in log space, ensure min is > 0 (it should be for Magnitude)
+    # If 0 exists, clip to a small epsilon or the second smallest value
+    if f_min <= 0: f_min = 1e-10 
+    
+    # Log-space padding (visual padding)
+    # We can just let matplotlib handle the log autoscaling if we set the same limits,
+    # but explicit limits ensure exact matching.
+    ylim_freq = (f_min * 0.5, f_max * 2.0) # Multiply/Divide for log padding
+
+    # ==========================================
+    # ROW 0: Input Signal
+    # ==========================================
+    # Time Domain
+    axes[0, 0].plot(t_vec, sraw_view)
+    axes[0, 0].set_title("Input Signal (Time Domain)")
+    axes[0, 0].set_ylabel("Amplitude")
+    axes[0, 0].set_ylim(ylim_time)  # <--- Matched Time Scale
+    axes[0, 0].grid(True, alpha=0.3)
+
+    # Frequency Domain (Skipping DC)
+    axes[0, 1].plot(freqs[1:], sraw_spec[1:])
+    axes[0, 1].set_title("Input Signal (Frequency Domain)")
+    axes[0, 1].set_ylabel("Magnitude")
+    axes[0, 1].set_yscale('log')
+    axes[0, 1].set_ylim(ylim_freq)  # <--- Matched Freq Scale
+    axes[0, 1].grid(True, alpha=0.3, which='both')
+
+    # ==========================================
+    # ROW 1: Inferred Velocity
+    # ==========================================
+    # Time Domain
+    axes[1, 0].plot(t_vec, velocity, color='black', linewidth=1, label='Velocity')
+    mean_vel = np.mean(velocity)
+    axes[1, 0].axhline(mean_vel, color='red', linestyle='--', linewidth=1.5, 
+                       label=f'Mean: {mean_vel:.3f}')
+    axes[1, 0].legend(loc='upper right', framealpha=0.9)
+    axes[1, 0].set_title("Inferred Velocity (Time Domain)")
+    axes[1, 0].set_ylabel("Velocity") 
+    axes[1, 0].grid(True, alpha=0.3)
+
+    # Frequency Domain (Skipping DC) - Velocity has its own scale
+    axes[1, 1].plot(freqs[1:], vel_spec[1:], color='black')
+    axes[1, 1].set_title("Inferred Velocity (Frequency Domain)")
+    axes[1, 1].set_ylabel("Magnitude")
+    axes[1, 1].set_yscale('log')
+    axes[1, 1].grid(True, alpha=0.3, which='both')
+
+    # ==========================================
+    # ROW 2: Simulated Signal
+    # ==========================================
+    # Time Domain
+    axes[2, 0].plot(t_vec, ssim_scaled)
+    axes[2, 0].set_title("Simulated Signal (Time Domain)")
+    axes[2, 0].set_xlabel("Time (s)")
+    axes[2, 0].set_ylabel("Amplitude")
+    axes[2, 0].set_ylim(ylim_time)  # <--- Matched Time Scale
+    axes[2, 0].grid(True, alpha=0.3)
+
+    # Frequency Domain (Skipping DC)
+    axes[2, 1].plot(freqs[1:], ssim_spec[1:])
+    axes[2, 1].set_title("Simulated Signal (Frequency Domain)")
+    axes[2, 1].set_xlabel("Frequency (Hz)")
+    axes[2, 1].set_ylabel("Magnitude")
+    axes[2, 1].set_yscale('log')
+    axes[2, 1].set_ylim(ylim_freq)  # <--- Matched Freq Scale
+    axes[2, 1].grid(True, alpha=0.3, which='both')
+
+    # --- Save ---
+    save_path = outdir / "summary_plot.png"
+    fig.savefig(save_path, dpi=150)
+    plt.close(fig)
+    print(f"Plot saved to {save_path}")
+    
+    
 # --- Execution Entry Point ---
 
 def main():
@@ -130,8 +231,8 @@ def main():
     # 2. Data Prep
     logger.info("Loading data...")
     sraw, xarea, area = load_data(args.signal, args.area, param)
-    sraw_scaled = utils.scale_by_baseline(sraw)
-    
+    sraw_scaled = utils.scale_data(sraw)
+
     # 3. Inference
     logger.info("Running inference...")
     velocity = run_velocity_inference(model, sraw_scaled, xarea, area)
@@ -141,9 +242,8 @@ def main():
     ssim = run_forward_model(velocity, xarea, area, param, ncpu=args.ncpu)
     
     # 5. Normalization for Comparison
-    mT_ss = get_steady_state_constant(param.scan_param)
-    ssim_scaled = ssim / mT_ss
-    
+    ssim_scaled = utils.scale_data(ssim)
+
     # 6. Save
     logger.info(f"Saving results to {args.outdir}")
     save_and_plot(args.outdir, velocity, sraw_scaled, ssim_scaled, param.scan_param.repetition_time)
