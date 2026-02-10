@@ -87,26 +87,11 @@ def compute_area(func_path, anat_path, aseg_path, reg_path, output_path):
     plt.savefig(out_dir / "area_vs_depth.png")
     plt.close()
 
-# def aggregate_area(input_manifest, outdir):
-#     area_col = Path(outdir) / "area_collection"
-#     area_col.mkdir(parents=True, exist_ok=True)
-    
-#     with open(input_manifest, 'r') as f:
-#         for line in f:
-#             if not line.strip(): continue
-#             file_path, sub, ses = line.strip().split('\t')
-#             src = Path(file_path)
-#             if src.exists():
-#                 data = np.loadtxt(src) # Files are already scaled by compute_area
-#                 np.savetxt(area_col / f"{sub}_area.txt", data, fmt="%.6f")
-#                 print(f"[+] Collected: {sub}")
-
 def aggregate_area(input_manifest, outdir):
     outdir_path = Path(outdir)
     outdir_path.mkdir(parents=True, exist_ok=True)
     
-    xarea_all = []
-    area_all = []
+    collection = []
     
     with open(input_manifest, 'r') as f:
         for line in f:
@@ -116,18 +101,20 @@ def aggregate_area(input_manifest, outdir):
             
             if src.exists():
                 data = np.loadtxt(src) 
-                xarea_all.append(data[:, 0])
-                area_all.append(data[:, 1])
+                # Store as (x_data, area_data, subject_id)
+                collection.append((data[:, 0], data[:, 1], sub))
                 print(f"[+] Collected: {sub}")
+            else:
+                print(f"[!] File not found: {file_path}")
 
     # Define the output pickle path
     pkl_path = outdir_path / "area_collection.pkl"
     
     # Save the variables as a tuple to match your loading logic
     with open(pkl_path, 'wb') as f:
-        pickle.dump((xarea_all, area_all), f)
+        pickle.dump(collection, f)
         
-    print(f"\n[!] Successfully saved aggregated areas to: {pkl_path}")
+    print(f"\n[!] Successfully saved {len(collection)} aggregated areas to: {pkl_path}")
 
 
 def main():
