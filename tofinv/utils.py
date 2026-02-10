@@ -71,18 +71,13 @@ def input_batched_signal_into_NN_area(s_data_for_nn, NN_model, xarea, area):
         padded = np.pad(leftover, ((0, pad_len), (0, 0)), mode="reflect")
         run_window(padded, nwindows * feature_length)
 
-        # trim output so it aligns with the true length ratio
-        out_len = int((ntime / feature_length) * feature_length)
-        velocity_NN = velocity_NN[:out_len]
+        # FIX: Simply trim to the original number of time points
+        velocity_NN = velocity_NN[:ntime]
 
     return velocity_NN
 
-def scale_by_baseline(s, pct=2.5):
-    """Calculates baseline from the bottom X% and normalizes the signal."""
+def scale_data(s, pct=2.5):
     s_copy = s.copy()
-    for ch in range(s_copy.shape[1]):
-        x_sorted = np.sort(s_copy[:, ch])
-        n = max(1, round(len(x_sorted) * pct / 100))
-        baseline = np.mean(x_sorted[:n])
-        s_copy[:, ch] = (s_copy[:, ch] - baseline) / baseline
+    baselines = np.mean(s_copy, axis=0)
+    s_copy = (s_copy - baselines) / baselines
     return s_copy
