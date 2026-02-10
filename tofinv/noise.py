@@ -30,9 +30,6 @@ def extract_noise(func_file, synthseg_file, sbref_file, outdir, num_end_slices=2
     func_data = nib.load(func_file).get_fdata()
     func_ts = func_data[noise_mask]
     
-    # extract reference baseline value
-    baseline_ref = np.expand_dims(np.mean(func_ts), axis=0)
-    
     mean_per_voxel = np.mean(func_ts, axis=1, keepdims=True)
     psc = (func_ts - mean_per_voxel) / (mean_per_voxel + 1e-9) * 100
     
@@ -40,10 +37,6 @@ def extract_noise(func_file, synthseg_file, sbref_file, outdir, num_end_slices=2
     out_file = os.path.join(outdir, "noise.txt")
     np.savetxt(out_file, psc, fmt="%.6f")
     print(f"[+] Saved noise signal {psc.shape} to {out_file}")
-    
-    out_file = os.path.join(outdir, "baseline_ref.txt")
-    np.savetxt(out_file, baseline_ref, fmt="%.6f")
-    print(f"[+] Saved baseline reference signal to {out_file}")
 
 def aggregate_noise(search_dir, outfile, desired_sample_length=300):
     """Finds all noise.txt files in a directory and pickles them into a bank."""

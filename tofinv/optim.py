@@ -47,7 +47,7 @@ def compute_err(x1, x2, rms):
 
 # --- CORE OPTIMIZATION LOGIC ---
 
-def run_optimization(signal_path, area_path, config_path, baseline_path, outdir):
+def run_optimization(signal_path, area_path, config_path, outdir):
     param = OmegaConf.load(config_path)
     nslice = param.nslice_to_use
     tr = param.scan_param.repetition_time
@@ -223,7 +223,6 @@ def main():
     parser.add_argument('--signal', type=str)
     parser.add_argument('--area', type=str)
     parser.add_argument('--config', type=str)
-    parser.add_argument('--baseline', type=str)
     parser.add_argument('--outdir', type=str)
     parser.add_argument('--outfile', type=str)
     args = parser.parse_args()
@@ -231,7 +230,7 @@ def main():
     if args.collect:
         aggregate_optim(args.outdir, args.outfile)
     else:
-        run_optimization(args.signal, args.area, args.config, args.baseline, args.outdir)
+        run_optimization(args.signal, args.area, args.config, args.outdir)
 
 if __name__ == "__main__":
     main()
