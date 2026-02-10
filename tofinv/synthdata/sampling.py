@@ -11,6 +11,7 @@ from omegaconf import OmegaConf
 from scipy.interpolate import interp1d
 
 import tofinv.utils as utils
+from tofinv.optim import transform
 from tofmodel.forward import posfunclib as pfl
 from tofmodel.forward import simulate as tm
 
@@ -72,39 +73,71 @@ def generate_batch(param, data_dir, task_id):
     ds = param.synthetic
     batch_size = ds.num_samples // ds.num_batches
     
+    base_seed = 42
+    rng = np.random.default_rng(base_seed + task_id)
+    
     # Load optimized velocity base
     with open(os.path.join(data_dir, 'crude_optim_velocity_amps.pkl'), 'rb') as f:
-        v_amps_all = pickle.load(f)
+        optim_data_list = pickle.load(f)
 
     # define information for cross-sectional areas
     if param.synthetic.areamode == 'straight_tube':
-        x = np.linspace(-3, 3, param.synthetic.num_time_point)
-        return x, np.ones_like(x)
+        # Default fallback
+        x_fixed = np.linspace(-3, 3, param.synthetic.num_time_point)
+        area_lookup = { "default": (x_fixed, np.ones_like(x_fixed)) }
     elif param.synthetic.areamode == 'collection': 
-        # load extracted cross-sectional area info
         with open(os.path.join(data_dir, 'area_collection.pkl'), 'rb') as f:
-            xarea_all, area_all = pickle.load(f)
+            # We updated this to be a list of (xarea, area, subject)
+            area_raw_list = pickle.load(f)
+        area_lookup = {sub: (xa, a) for xa, a, sub in area_raw_list}
 
     # 3. Build parameter list
-    frequencies = np.fft.rfftfreq(ds.num_time_point, d=0.378)
+    frequencies = np.fft.rfftfreq(ds.num_time_point, d=param.scan_param.repetition_time)
     batch_params = []
     
     for _ in range(batch_size):
-        amp = v_amps_all[np.random.randint(0, len(v_amps_all))]
+
+        ind_random = np.random.randint(0, len(optim_data_list))
+        vbase, res, sub_name = optim_data_list[ind_random]
         
+        # jitter the optimized parameters
+        jitter_range = (0.95, 1.05)
+        jitter_vector = np.random.uniform(jitter_range[0], jitter_range[1], size=len(res.x))
+        res_x_jittered = res.x * jitter_vector
+        random_voffset = res_x_jittered[-1]
+        random_phase = np.random.uniform(0, 2*np.pi, frequencies.size)
+        
+        # 1. Transform velocity to get the "optimized" version
+        # We use the real phase from the original recording
+        phase_base = np.angle(np.fft.rfft(vbase))
+        vopt = transform(vbase, res_x_jittered, phase_base)
+        
+        # 2. Extract Spectral Components
+        V_freq = np.fft.rfft(vopt, axis=0)
+        amp_raw = np.abs(V_freq)
+        
+        # --- SELECT MATCHING AREA ---
         if param.synthetic.areamode == 'collection':
-            area_random_ind = np.random.randint(0, len(xarea_all))
-            xarea = xarea_all[area_random_ind]
-            area = area_all[area_random_ind]
-            scale = np.random.uniform(param.synthetic.area_scale_lower, param.synthetic.area_scale_upper)
+            if sub_name in area_lookup:
+                xarea_raw, area_raw = area_lookup[sub_name]
+            else:
+                # Fallback if a subject exists in velocity but not in area collection
+                logger.warning(f"Subject {sub_name} not found in area collection. Picking random.")
+                random_sub = np.random.choice(list(area_lookup.keys()))
+                xarea_raw, area_raw = area_lookup[random_sub]
+
+            # Apply geometric augmentations
             offset = np.random.uniform(param.synthetic.slc1_offset_lower, param.synthetic.slc1_offset_upper)
-            xarea, area = get_resampled_area(xarea, area, param.synthetic.num_time_point, offset, scale)
-                
+            scale = np.random.uniform(param.synthetic.area_scale_lower, param.synthetic.area_scale_upper)
+            xarea, area = get_resampled_area(xarea_raw, area_raw, param.synthetic.num_time_point, offset, scale)
+        else:
+            xarea, area = area_lookup["default"]
+        
         batch_params.append({
             'frequencies': tuple(frequencies),
-            'v_offset': 0,
-            'rand_phase': np.random.uniform(0, 2*np.pi, frequencies.size),
-            'velocity_input': tuple(amp),
+            'v_offset': random_voffset,
+            'rand_phase': random_phase,
+            'velocity_input': tuple(amp_raw),
             'param': param,
             'xarea_sample': xarea,
             'area_sample': area,
