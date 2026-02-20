@@ -8,7 +8,6 @@ import torch
 import matplotlib.pyplot as plt
 from omegaconf import OmegaConf
 
-# Internal TOF imports
 from tofmodel.inverse.models import TOFinverse
 import tofinv.utils as utils
 from tofmodel.forward import posfunclib as pfl
@@ -16,8 +15,6 @@ from tofmodel.forward import simulate as tm
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
-
-# --- Data & Model Loading ---
 
 def load_config(config_path):
     return OmegaConf.load(config_path)
@@ -39,7 +36,6 @@ def load_network(state_filename, param, device='cpu'):
     return model
 
 def load_data(spath, area_path, param):
-    """Loads signal and area data, resamples area to match model input size."""
     offset = param.scan_param.num_pulse_baseline_offset
     n_slices = param.nslice_to_use
     
@@ -55,24 +51,18 @@ def load_data(spath, area_path, param):
     area = np.interp(x_new, x_old, area_raw)
     return sraw, xarea, area
 
-# --- Signal Processing ---
-
 def get_steady_state_constant(sp):
-    """Computes the theoretical steady state signal (mT_ss)."""
     fa_rad = np.radians(sp.flip_angle)
     exp_tr_t1 = np.exp(-sp.repetition_time / sp.t1_time)
     exp_te_t2 = np.exp(-sp.echo_time / sp.t2_time)
     
     return np.sin(fa_rad) * exp_te_t2 * (1 - exp_tr_t1) / (1 - exp_tr_t1 * np.cos(fa_rad))
 
-# --- Main Logic Blocks ---
-
 def run_velocity_inference(model, s_data, xarea, area):
     return utils.input_batched_signal_into_NN_area(s_data, model, xarea, area)
 
 def run_forward_model(velocity_NN, xarea, area, param, ncpu=8):
     sp = param.scan_param
-    # Higher resolution velocity for simulation
     v_up = utils.upsample(velocity_NN, velocity_NN.size * 100 + 1, sp.repetition_time).flatten()
     t = np.arange(0, sp.repetition_time * velocity_NN.size, sp.repetition_time / 100)
     
@@ -83,7 +73,7 @@ def run_forward_model(velocity_NN, xarea, area, param, ncpu=8):
     s_sim_raw = tm.simulate_inflow(
         sp.repetition_time, sp.echo_time, velocity_NN.size + sp.num_pulse_baseline_offset,
         sp.slice_width, sp.flip_angle, sp.t1_time, sp.t2_time, sp.num_slice, 
-        sp.alpha_list, sp.MBF, pos_func, ncpu=ncpu, varysliceprofile=False, dx=0.005, offset_fact=0, enable_logging=True
+        sp.alpha_list, sp.MBF, pos_func, ncpu=ncpu, varysliceprofile=True, dx=0.005, offset_fact=0, enable_logging=True
     )
     return s_sim_raw[sp.num_pulse_baseline_offset:, :param.nslice_to_use]
 
