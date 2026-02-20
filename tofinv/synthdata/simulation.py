@@ -50,7 +50,7 @@ def simulate_sample(isample, sample_data, output_dir):
         # 3. Bloch Simulation
         s_raw = tm.simulate_inflow(p.repetition_time, p.echo_time, p.num_pulse+p.num_pulse_baseline_offset, 
                                    p.slice_width, p.flip_angle, p.t1_time, p.t2_time, p.num_slice, 
-                                   p.alpha_list, p.MBF, x_func, ncpu=1, varysliceprofile=False, dx=0.005, offset_fact=0, enable_logging=True)
+                                   p.alpha_list, p.MBF, x_func, ncpu=1, varysliceprofile=True, dx=0.005, offset_fact=0, enable_logging=True)
         
         # Slice to requested output size
         s = s_raw[p.num_pulse_baseline_offset:, :input_data['param'].nslice_to_use]
@@ -70,10 +70,7 @@ def simulate_sample(isample, sample_data, output_dir):
         return False
     
 def run_batch(input_dir, task_id, output_dir):
-    """Finds the correct pkl in input_dir based on task_id and runs simulation."""
-    # Logic to find the file manually
     input_file = None
-    # Adjust naming pattern here to match what synthData_sort actually produces
     target_pattern = f"task{int(task_id):03}.pkl" 
     
     for file in os.listdir(input_dir):
