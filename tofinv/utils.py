@@ -1,7 +1,6 @@
-import multiprocessing.shared_memory as msm
 import numpy as np
 import torch
-
+from scipy import signal
 
 def define_velocity_fourier(sample_amps, ntimepoint, phase, voffset):
     famps = sample_amps * np.exp(1j * phase)
@@ -40,44 +39,33 @@ def input_batched_signal_into_NN_area(s_data_for_nn, NN_model, xarea, area):
     velocity_NN = np.zeros((nwindows + (1 if remainder > 0 else 0)) * feature_length)
     
     def run_window(s_window, start_idx):
-        # 1. Create the numpy array
         x_np = np.zeros((1, nfeature, feature_length))
         for islice in range(num_slice_to_use):
             x_np[0, islice, :] = s_window[:, islice].squeeze()
         x_np[0, -2, :] = xarea
         x_np[0, -1, :] = area
         
-        # 2. Convert to tensor and move to the correct device
         device = next(NN_model.parameters()).device
         x = torch.from_numpy(x_np).float().to(device)
-        
-        # 3. Predict
         y_predicted_tensor = NN_model(x)
-        
-        # 4. Move back to CPU to store in numpy results array
         y_predicted = y_predicted_tensor.detach().cpu().numpy().squeeze()
-        
         velocity_NN[start_idx:start_idx + feature_length] = y_predicted
 
-    # full windows
     for w in range(nwindows):
         ind1, ind2 = w * feature_length, (w + 1) * feature_length
         run_window(s_data_for_nn[ind1:ind2], w * feature_length)
 
-    # leftover window (pad to full length)
     if remainder > 0:
         leftover = s_data_for_nn[-remainder:]
         pad_len = feature_length - remainder
         padded = np.pad(leftover, ((0, pad_len), (0, 0)), mode="reflect")
         run_window(padded, nwindows * feature_length)
 
-        # FIX: Simply trim to the original number of time points
         velocity_NN = velocity_NN[:ntime]
 
     return velocity_NN
 
-def scale_data(s, pct=2.5):
-    s_copy = s.copy()
-    baselines = np.mean(s_copy, axis=0)
-    s_copy = (s_copy - baselines) / baselines
-    return s_copy
+def scale_data(s):
+    raw_mean = np.mean(s, axis=0)
+    detrended = signal.detrend(s, axis=0)
+    return detrended / raw_mean
