@@ -153,48 +153,52 @@ def compute_area(func_path, anat_path, aseg_path, reg_path, output_path):
         out_dir / "slice_inspection.png"
     )
 
-def aggregate_area(input_manifest, outdir):
-    outdir_path = Path(outdir)
-    outdir_path.mkdir(parents=True, exist_ok=True)
+def aggregate_area(search_dir, outfile):
+    search_path = Path(search_dir)
+    area_files = sorted(list(search_path.rglob("area.txt")))
     
     collection = []
-    
-    with open(input_manifest, 'r') as f:
-        for line in f:
-            if not line.strip(): continue
-            file_path, sub, ses = line.strip().split('\t')
-            src = Path(file_path)
-            
-            if src.exists():
-                data = np.loadtxt(src) 
-                # Store as (x_data, area_data, subject_id)
-                collection.append((data[:, 0], data[:, 1], sub))
-                print(f"[+] Collected: {sub}")
-            else:
-                print(f"[!] File not found: {file_path}")
 
-    # Define the output pickle path
-    pkl_path = outdir_path / "area_collection.pkl"
-    
-    # Save the variables as a tuple to match your loading logic
-    with open(pkl_path, 'wb') as f:
-        pickle.dump(collection, f)
-        
-    print(f"\n[!] Successfully saved {len(collection)} aggregated areas to: {pkl_path}")
+    for f in area_files:
+        parts = f.parts
+        try:
+            area_idx = parts.index("area")
+            sub = parts[area_idx - 2]
+            ses = parts[area_idx - 1]
+            data = np.loadtxt(f) 
+            collection.append((data[:, 0], data[:, 1], sub))
 
+        except (ValueError, IndexError) as e:
+            print(f"Skipping malformed path: {f}")
+
+    with open(outfile, "wb") as f_out:
+        pickle.dump(collection, f_out)
+    
+    print(f"[+] Aggregated {len(collection)} area records to {outfile}")
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--collect', action='store_true')
-    parser.add_argument('--func'); parser.add_argument('--anat')
-    parser.add_argument('--aseg'); parser.add_argument('--reg')
-    parser.add_argument('--outdir'); parser.add_argument('--input_manifest')
+    parser.add_argument('--collect', action='store_true', help="Aggregate existing area files")
+    
+    # Standard processing args
+    parser.add_argument('--func', type=str)
+    parser.add_argument('--anat', type=str)
+    parser.add_argument('--aseg', type=str)
+    parser.add_argument('--reg', type=str)
+    
+    # Shared/Collection args
+    parser.add_argument('--outdir', type=str, help="Output dir for compute, or Search dir for collect")
+    parser.add_argument('--outfile', type=str, help="Path for the final pickle (use with --collect)")
+    
     args = parser.parse_args()
 
     if args.collect:
-        aggregate_area(args.input_manifest, args.outdir)
+        aggregate_area(args.outdir, args.outfile)
     else:
         compute_area(args.func, args.anat, args.aseg, args.reg, args.outdir)
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
