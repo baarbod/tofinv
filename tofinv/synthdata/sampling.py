@@ -19,19 +19,6 @@ from tofmodel.forward import simulate as tm
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s', stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
-def get_resampled_area(x, a, n_points, offset=0, scale=1.0):
-    edge_buffer = 20
-    if len(a) > 2 * edge_buffer:
-        central_widest_idx = np.argmax(a[edge_buffer:-edge_buffer]) + edge_buffer
-    else:
-        central_widest_idx = np.argmax(a)
-    widest_pos = x[central_widest_idx]
-    x_centered = x - widest_pos - offset
-    a_scaled = a * scale
-    f = interp1d(x_centered, a_scaled, kind='linear', fill_value='extrapolate')
-    x_new = np.linspace(x_centered.min(), x_centered.max(), n_points)
-    return x_new, f(x_new)
-
 def compute_init_positions(input_data):
     p = input_data['param'].scan_param
     v = utils.define_velocity_fourier(input_data['velocity_input'], p.num_pulse, input_data['rand_phase'], input_data['v_offset'])
@@ -72,8 +59,7 @@ def generate_batch(param, optim_data_list, area_lookup, task_id):
         random_voffset = res_x_jittered[-1]
         phase_base = np.angle(np.fft.rfft(vbase))
         vopt = transform(vbase, res_x_jittered, phase_base)
-        phase_opt = np.angle(np.fft.rfft(vopt))
-        random_phase = phase_opt + rng.normal(0, 0.15, size=frequencies.size)
+        random_phase = np.angle(np.fft.rfft(vopt))
         vopt_demean = vopt - vopt.mean()
         V_freq = np.fft.rfft(vopt_demean, axis=0)
         amp_raw = np.abs(V_freq)
@@ -85,9 +71,10 @@ def generate_batch(param, optim_data_list, area_lookup, task_id):
                 logger.warning(f"Subject {sub_name} not found in area collection. Picking random.")
                 random_sub = rng.choice(keys_area)
                 xarea_raw, area_raw = area_lookup[random_sub]
-            offset = np.random.uniform(param.synthetic.slc1_offset_lower, param.synthetic.slc1_offset_upper)
-            scale = np.random.uniform(param.synthetic.area_scale_lower, param.synthetic.area_scale_upper)
-            xarea, area = get_resampled_area(xarea_raw, area_raw, param.synthetic.num_time_point, offset, scale)
+            x_new = np.linspace(0, 1, ds.num_time_point)
+            x_old = np.linspace(0, 1, xarea_raw.size)
+            xarea = np.interp(x_new, x_old, xarea_raw)
+            area = np.interp(x_new, x_old, area_raw)
         else:
             xarea, area = area_lookup["default"]
             
