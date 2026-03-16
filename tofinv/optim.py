@@ -9,43 +9,43 @@ from skopt.plots import plot_convergence, plot_evaluations
 import tofinv.evaluation as eval
 import tofinv.utils as utils
 import skopt
-
-# --- HELPER FUNCTIONS ---
+from scipy.signal.windows import tukey
 
 def transform(vbase, params, phase_input):
-    v_scale, fg_end, mu, alpha, voffset = params
+    v_scale, beta, voffset = params
     v = vbase * v_scale
     V = np.abs(np.fft.rfft(v))
-    gain_curve = np.linspace(1.0, fg_end, len(V)) ** mu
-    mag_norm = V / (np.max(V) + 1e-9)
-    weight = mag_norm ** alpha
-    weighted_gain = 1 + (gain_curve - 1) * weight
+    freq_norm = np.linspace(0, 1, len(V))
+    gain_curve = np.exp(beta * freq_norm)
+    weighted_gain = 1 + (gain_curve - 1)
     V_scaled = V * weighted_gain
-    return utils.define_velocity_fourier(V_scaled, vbase.size, phase_input, voffset)
+    vout = utils.define_velocity_fourier(V_scaled, vbase.size, phase_input, voffset)
+    return make_periodic(vout)
 
 def rfft_freqs_and_spectrum(x, tr=0.378, demean=True):
-    if demean: x = x - x.mean()
+    if demean: x = x - x.mean(axis=0)
     freqs = np.fft.rfftfreq(len(x), d=tr)
     mag = np.abs(np.fft.rfft(x, axis=0))
     return freqs, mag
 
 def compute_err(x1, x2, rms):
-    eps = 1e-12
-    min_len = min(len(x1), len(x2))
-    
+    eps = 1e-12  
     nslice = len(rms)
-    log_x1 = np.log(x1[:min_len, :] + eps)
-    log_x2 = np.log(x2[:min_len, :] + eps)
-    
+    log_x1 = np.log(x1 + eps)
+    log_x2 = np.log(x2 + eps)
     total_loss = 0
     for i in range(nslice):
         diff = np.abs(log_x1[:, i] - log_x2[:, i])
         chan_loss = np.sum(diff)
-        total_loss += chan_loss# * (1 / (rms[i] + 1e-6))
-        
+        total_loss += chan_loss
     return total_loss
 
-# --- CORE OPTIMIZATION LOGIC ---
+def make_periodic(signal, alpha=0.1):
+    dc_offset = np.mean(signal)
+    ac_signal = signal - dc_offset
+    window = tukey(len(signal), alpha=alpha)
+    ac_windowed = ac_signal * window
+    return ac_windowed + dc_offset
 
 def run_optimization(signal_path, area_path, config_path, outdir):
     param = OmegaConf.load(config_path)
@@ -56,7 +56,6 @@ def run_optimization(signal_path, area_path, config_path, outdir):
     plots_dir = outdir / 'plots'
     plots_dir.mkdir(parents=True, exist_ok=True)
     
-    # Load data
     s_raw_full, xarea, area = eval.load_data(signal_path, area_path, param)
     
     window_size = param.synthetic.num_time_point
@@ -66,30 +65,40 @@ def run_optimization(signal_path, area_path, config_path, outdir):
     for i in range(nwindows):
         print(f"[*] Optimizing Window {i}...")
         s_raw = s_raw_full[i*window_size : (i+1)*window_size, :]
+        
         v_base = (s_raw[:, 0] - s_raw[:, 0].mean()) / (s_raw[:, 0].max() + 1e-9)
+        v_base = make_periodic(v_base)
+        
         phase = np.angle(np.fft.rfft(v_base))
         
         s_target = utils.scale_data(s_raw)
         
         psd_measured = np.abs(np.fft.rfft(s_target, axis=0))
+        psd_measured = psd_measured[1:, :]
+        
         rms = np.sqrt(np.mean(psd_measured**2, axis=0))
+        rms = rms / np.sum(rms)
         
         def objective(p):
             v_opt = transform(v_base, p, phase)
-            ssim = eval.run_forward_model(v_opt, xarea, area, param, ncpu=10)#[num_offset:, :]
+            
+            ssim = eval.run_forward_model(v_opt, xarea, area, param, ncpu=-1)#[num_offset:, :]
             ssim_scaled = utils.scale_data(ssim)
             psd_sim = np.abs(np.fft.rfft(ssim_scaled, axis=0))
             if np.any(np.isnan(psd_sim)):
                 return 1e6
+            
+            psd_sim = psd_sim[1:, :]
+            
             freq_err = compute_err(psd_sim, psd_measured, rms)
             return freq_err
 
-        # NEED TO FIX HARD CODED BOUNDS
-        res = gp_minimize(objective, [(1e-8, 4.0), (0.25, 2.0), (0.25, 16.0), (1e-8, 4.0), (-0.15, 0.15)], 
-                          n_calls=250, n_initial_points=200, 
-                          acq_func="gp_hedge", 
-                          initial_point_generator='lhs', 
-                          acq_optimizer='lbfgs')
+        res = gp_minimize(objective, [(0.0001, 2.0), (0.0001, 5.0), (-0.3, 0.3)],
+                          x0=[0.5, 2.0, 0.05],
+                          n_calls=200, n_initial_points=50,
+                          initial_point_generator='lhs',
+                          acq_optimizer='lbfgs',
+                          acq_func="EI")
 
         all_v_bases.append(v_base)
         all_opt_params.append(res.x)
@@ -135,20 +144,20 @@ def run_optimization(signal_path, area_path, config_path, outdir):
         freqs, m_base = rfft_freqs_and_spectrum(v_base, tr=tr)
         _, m_opt = rfft_freqs_and_spectrum(v_opt, tr=tr)
         
-        axes[0, 0].plot(freqs, m_base, color='gray')
+        axes[0, 0].plot(freqs[1:], m_base[1:], color='gray')
         axes[0, 0].set_title('Base PSD')
         
-        axes[0, 1].plot(freqs, m_opt, color='black')
+        axes[0, 1].plot(freqs[1:], m_opt[1:], color='black')
         axes[0, 1].set_title('Opt PSD')
         
         for ch in range(nslice):
             f, m = rfft_freqs_and_spectrum(s_target[:, ch], tr=tr)
-            axes[1, 0].plot(f, m, alpha=0.7)
+            axes[1, 0].plot(f[1:], m[1:], alpha=0.7)
         axes[1, 0].set_title('Measured PSD')
         
         for ch in range(nslice):
             f, m = rfft_freqs_and_spectrum(ssim_opt_plot[:, ch], tr=tr)
-            axes[1, 1].plot(f, m, alpha=0.7)
+            axes[1, 1].plot(f[1:], m[1:], alpha=0.7)
         axes[1, 1].set_title('Simulated PSD')
         
         for ax in axes.flatten(): ax.set_xlabel('Freq (Hz)')
@@ -177,13 +186,10 @@ def run_optimization(signal_path, area_path, config_path, outdir):
 
 def aggregate_optim(search_dir, outfile):
     search_path = Path(search_dir)
-    data_triplets = [] # Renamed from pairs to reflect 3 elements
-    
-    # We look for the individual window results saved via skopt.dump
+    data_triplets = [] 
     result_files = sorted(list(search_path.rglob("optim_result_win*.pkl")))
     
     for res_file in result_files:
-        # --- SUBJECT EXTRACTION ---
         parts = res_file.parts
         try:
             sub_idx = parts.index("subjects")
@@ -191,10 +197,8 @@ def aggregate_optim(search_dir, outfile):
         except (ValueError, IndexError):
             subject_name = res_file.parents[3].name if len(res_file.parents) > 3 else "unknown"
 
-        # Load the full skopt result object
         res = skopt.load(res_file)
         
-        # Load the corresponding base velocities
         v_base_path = res_file.parent / "base_velocity.txt"
         
         if v_base_path.exists():
@@ -206,8 +210,7 @@ def aggregate_optim(search_dir, outfile):
                 else:
                     v_base = v_bases
                 
-                # Store as a triplet: (v_base, res, subject_name)
-                data_triplets.append((v_base, res, subject_name))
+                data_triplets.append((v_base, res.x, subject_name))
                 
             except Exception as e:
                 print(f"Error matching {res_file.name} to v_base: {e}")
