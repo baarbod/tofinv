@@ -105,21 +105,22 @@ def generate_batch(param, optim_data_list, area_lookup, task_id):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, help="Path to YAML config")
-    parser.add_argument("--data_dir", required=True, help="Path to input data (KDEs, areas)")
     parser.add_argument("--output", required=True, help="Path to save the batch .pkl")
+    parser.add_argument("--optim_path", required=True)
+    parser.add_argument("--area_path", required=True)
     parser.add_argument("--taskid", type=int, default=1)
     args = parser.parse_args()
 
     cfg = OmegaConf.load(args.config)
     
-    with open(os.path.join(args.data_dir, 'crude_optim_velocity_amps.pkl'), 'rb') as f:
-            optim_data_list = pickle.load(f)
+    with open(args.optim_path, 'rb') as f:
+        optim_data_list = pickle.load(f)
     
     if cfg.synthetic.areamode == 'straight_tube':
         x_fixed = np.linspace(-3, 3, cfg.synthetic.num_time_point)
         area_lookup = { "default": (x_fixed, np.ones_like(x_fixed)) }
     elif cfg.synthetic.areamode == 'collection': 
-        with open(os.path.join(args.data_dir, 'area_collection.pkl'), 'rb') as f:
+        with open(args.area_path, 'rb') as f:
             area_raw_list = pickle.load(f)
         area_lookup = {sub: (xa, a) for xa, a, sub in area_raw_list}
 
