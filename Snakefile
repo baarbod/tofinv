@@ -13,7 +13,11 @@ SYNTHDIR = f"{OUTDIR}/3_synthetic_data"
 EXPDIR   = f"{OUTDIR}/4_experiments"
 EVALDIR  = f"{OUTDIR}/5_evaluations"
 
-CONFIG_YML = config["paths"]["config_file"]
+# Grab the config file path passed via the CLI (--configfile)
+if workflow.overwrite_configfiles:
+    CONFIG_YML = workflow.overwrite_configfiles[0]
+else:
+    raise ValueError("Missing config file! Please run with: snakemake --configfile /path/to/config.yml")
 
 # --- Data Loading ---
 manifest = pd.read_csv(
