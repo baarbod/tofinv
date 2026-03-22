@@ -296,13 +296,23 @@ rule train_model:
         train_args = get_train_args,
         epochs = config["params"]["train_epochs"],
         batch = config["params"]["train_batch_size"],
-        lr = config["params"]["train_lr"]
+        lr = config["params"]["train_lr"],
+        outdir = f"{EXPDIR}/{{exp}}"
     resources:
         runtime = 240, nodes = 1, cpus_per_task = 1, mem_mb = 64000, slurm_partition = "mit_preemptable", slurm_extra = "--gres=gpu:1"
     shell:
-        "tof train --epochs {params.epochs} --batch {params.batch} --lr {params.lr} "
-        "--exp_name {wildcards.exp} --dataset {input.dataset} --noisedir {DATADIR} "
-        "--surrogate_path {input.surrogate} {params.train_args}"
+        """
+        python -m tofinv.train \
+            --epochs {params.epochs} \
+            --batch {params.batch} \
+            --lr {params.lr} \
+            --dataset {input.dataset} \
+            --noisedir {DATADIR} \
+            --surrogate_path {input.surrogate} \
+            --outdir {params.outdir} \
+            --out_weights {output.model} \
+            {params.train_args}
+        """
 
 # ---------------------------------------------------------
 # STAGE 5: EVALUATIONS
