@@ -134,12 +134,14 @@ rule area:
     output:
         area_file = f"{PREPDIR}/{{sub}}/{{ses}}/area/area.txt",
         area_dir = directory(f"{PREPDIR}/{{sub}}/{{ses}}/area")
+    params:
+        func_vox_mm = config["scan_param"]["slice_width"]*10
     resources:
         runtime = 30, nodes = 1, cpus_per_task = 1, mem_mb = 16000,
         slurm_partition = "mit_normal"
     shell:
         "python -m tofinv.area --func {input.func} --anat {input.anat} "
-        "--aseg {input.aseg} --reg {input.reg} --outdir {output.area_dir}"
+        "--aseg {input.aseg} --reg {input.reg} --outdir {output.area_dir} --func_vox {param.func_vox_mm}"
 
 rule optim:
     input:
