@@ -23,6 +23,6 @@ dependencies = [
     "snakemake==7.32.4",
     
     # Custom GitHub Packages
-    "tofmodel @ git+https://github.com/baarbod/tofmodel.git@main",
-    "autocsfmask @ git+https://github.com/baarbod/autocsfmask.git@main"
+    "tofmodel @ git+https://github.com/baarbod/tofmodel.git@master",
+    "autocsfmask @ git+https://github.com/baarbod/autocsfmask.git@master"
 ]
