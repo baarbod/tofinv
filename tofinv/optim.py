@@ -49,6 +49,11 @@ def make_periodic(signal, alpha=0.1):
 
 def run_optimization(signal_path, area_path, config_path, outdir):
     param = OmegaConf.load(config_path)
+
+    # extract optim keywords and convert dimensions to tuples
+    optim_kwargs = OmegaConf.to_container(param.optim, resolve=True)
+    optim_kwargs["dimensions"] = [tuple(dim) for dim in optim_kwargs["dimensions"]]    
+    
     nslice = param.nslice_to_use
     tr = param.scan_param.repetition_time
     
@@ -58,7 +63,11 @@ def run_optimization(signal_path, area_path, config_path, outdir):
     
     s_raw_full, xarea, area = eval.load_data(signal_path, area_path, param)
     
-    window_size = param.synthetic.num_time_point
+    if param.synthetic.areamode == 'straight_tube':
+        xarea = np.linspace(-3, 3, param.scan_param.num_pulse)
+        area = np.ones_like(xarea)
+    
+    window_size = param.scan_param.num_pulse
     nwindows = np.min([s_raw_full.shape[0] // window_size, 3]) 
     all_v_bases, all_opt_params = [], []
     
@@ -93,12 +102,7 @@ def run_optimization(signal_path, area_path, config_path, outdir):
             freq_err = compute_err(psd_sim, psd_measured, rms)
             return freq_err
 
-        res = gp_minimize(objective, [(0.0001, 2.0), (0.0001, 5.0), (-0.3, 0.3)],
-                          x0=[0.5, 2.0, 0.05],
-                          n_calls=200, n_initial_points=50,
-                          initial_point_generator='lhs',
-                          acq_optimizer='lbfgs',
-                          acq_func="EI")
+        res = gp_minimize(objective, **optim_kwargs)
 
         all_v_bases.append(v_base)
         all_opt_params.append(res.x)
