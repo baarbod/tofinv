@@ -1,0 +1,3 @@
+"dummy1","ses-01","run-01","dummy_data/dummy1/func.nii.gz","dummy_data/dummy1/sbref.nii.gz","dummy_data/dummy1/anat.nii.gz","dummy_data/dummy1/aseg.nii.gz","dummy_data/dummy1/reg.dat"
+"dummy2","ses-01","run-01","dummy_data/dummy2/func.nii.gz","dummy_data/dummy2/sbref.nii.gz","dummy_data/dummy2/anat.nii.gz","dummy_data/dummy2/aseg.nii.gz","dummy_data/dummy2/reg.dat"
+"dummy3","ses-01","run-01","dummy_data/dummy3/func.nii.gz","dummy_data/dummy3/sbref.nii.gz","dummy_data/dummy3/anat.nii.gz","dummy_data/dummy3/aseg.nii.gz","dummy_data/dummy3/reg.dat"
