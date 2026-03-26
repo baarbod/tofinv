@@ -4,7 +4,7 @@ dummy_run: True # this flag must be true if running with the dummy data, otherwi
 
 # paste in your paths
 paths:
-  input_manifest: "config/input_dummy_test.txt.txt"
+  input_manifest: "config/input_dummy_test.txt"
   output_dir: "output_dummy"
   fs_container: "path/to" # not needed for dummy run
   bind_container: "path/to" # not needed for dummy run
