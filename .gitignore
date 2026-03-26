@@ -8,3 +8,4 @@ logs*
 .idea
 output*
 run_snakemake.sh
+dummy_data
