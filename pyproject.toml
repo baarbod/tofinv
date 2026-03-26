@@ -22,6 +22,7 @@ dependencies = [
     "surfa==0.6.1",
     "snakemake==7.32.4",
     "torch==2.5.1",
+    "PuLP==2.7.0",
     
     # Custom GitHub Packages
     "tofmodel @ git+https://github.com/baarbod/tofmodel.git@master",
