@@ -27,6 +27,8 @@ def main():
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--container", required=True, help="Path to freesurfer container file")
     parser.add_argument("--container_bind", required=True, help="Paths to bind for apptainer")
+    parser.add_argument("--dummy_run", action="store_true", help="flag when running with dummy data, which will skip running SynthSeg and use a pre-generated mask instead")
+    
     args = parser.parse_args()
 
     outdir = pathlib.Path(args.outdir)
@@ -37,18 +39,25 @@ def main():
 
     container = args.container
     print(f"[*] Running SynthSeg via {args.container}")
-    subprocess.run([
-        "apptainer", "exec", "-B", args.container_bind,
-        container, "mri_synthseg", "--i", str(sbref_fixed), "--o", str(outdir),
-    ], check=True)
-
+    
+    if args.dummy_run:
+        print("[*] Running in dummy mode, skipping SynthSeg and using pre-generated mask.")
+        func_dir = pathlib.Path(args.func).parent
+        dummy_mask_path = func_dir / "aseg_sbref_space.nii.gz"
+        subprocess.run(["cp", str(dummy_mask_path), str(outdir / "SBRef_fixed_synthseg.nii.gz")])
+    else:
+        subprocess.run([
+            "apptainer", "exec", "-B", args.container_bind,
+            container, "mri_synthseg", "--i", str(sbref_fixed), "--o", str(outdir),
+        ], check=True)
+    
     synthseg_file = outdir / "SBRef_fixed_synthseg.nii.gz"
     resampled = sf.load_volume(synthseg_file).resample_like(sf.load_volume(sbref_fixed), method='nearest')
     mask = resampled == 15  # CSF label
     
-    dilated = ndimage.binary_dilation(mask[:, :, :args.nslice_to_keep], structure=ndimage.generate_binary_structure(3, 4), iterations=1)
+    dilated = ndimage.binary_dilation(mask[:, :, :args.nslice_to_keep+1], structure=ndimage.generate_binary_structure(3, 4), iterations=1)
     
-    for islice in range(args.nslice_to_keep - 1):
+    for islice in range(args.nslice_to_keep):
         if np.sum(dilated[:, :, islice]) == 0:
             dilated[:, :, islice] = dilated[:, :, islice + 1]
     if np.sum(dilated[:, :, -1]) == 0:
