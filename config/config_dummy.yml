@@ -4,10 +4,10 @@ dummy_run: True # this flag must be true if running with the dummy data, otherwi
 
 # paste in your paths
 paths:
-  input_manifest: "config/lines_for_dummy_test.txt"
+  input_manifest: "config/input_dummy_test.txt.txt"
   output_dir: "output_dummy"
-  fs_container: "" # not needed for dummy run
-  bind_container: "" # not needed for dummy run
+  fs_container: "path/to" # not needed for dummy run
+  bind_container: "path/to" # not needed for dummy run
 
 
 # keyword parameters for gp_minimize used in the optimization module
