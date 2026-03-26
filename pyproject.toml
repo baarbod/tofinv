@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tofinv"
+version = "1.0.0"
+description = "Velocity quantification pipeline"
+requires-python = ">=3.8"
+dependencies = [
+    # Standard PyPI Packages
+    "joblib==1.4.2",
+    "matplotlib==3.10.8",
+    "nibabel==5.4.2",
+    "numpy==2.4.3",
+    "omegaconf==2.3.0",
+    "pandas==3.0.1",
+    "scikit-learn==1.8.0",
+    "scikit-optimize==0.10.2",
+    "scipy==1.17.1",
+    "seaborn==0.13.2",
+    "surfa==0.6.1",
+    "snakemake==7.32.4",
+    
+    # Custom GitHub Packages
+    "tofmodel @ git+https://github.com/baarbod/tofmodel.git@main",
+    "autocsfmask @ git+https://github.com/baarbod/autocsfmask.git@main"
+]
