@@ -1,0 +1,83 @@
+
+nslice_to_use: 3 # keep only these edge slices
+dummy_run: False # this flag must be true if running with the dummy data, otherwise set to false
+
+# paste in your paths
+paths:
+  input_manifest: "PATH/TO/INPUT/TEXTFILE"
+  output_dir: "PATH/TO/OUTPUT"
+  fs_container: "PATH/TO/FREESURFERCONTAINER"
+  bind_container: "PATH/TO/BIND"
+
+
+# keyword parameters for gp_minimize used in the optimization module
+# you probably would not need to change these, except increasing n_calls and n_initial_points for better performance at the cost of longer runtime
+optim:
+  dimensions:
+    - [0.0001, 2.0] # scaling factor
+    - [0.0001, 5.0] # frequency gain factor
+    - [-0.3, 0.3] # velocity offset
+  x0: [0.5, 2.0, 0.05] # initial guess for the optimization
+  n_calls: 200 # number of optimization iterations (including initial points)
+  n_initial_points: 50 # number of initial random points to sample before starting the optimization
+  initial_point_generator: "lhs" # method for generating initial random points, options are ["random", "lhs", "sobol"]
+  acq_optimizer: "lbfgs" # method for optimizing the acquisition function, options are ["lbfgs", "sampling"]
+  acq_func: "EI" # acquisition function to use, options are ["EI", "PI", "LCB"]
+
+resources:
+  threads_high: 100
+  threads_low: 10
+
+# parameters related to neural network training
+train:
+  train_epochs: 5000 # max epochs for training, but early stopping is used so it may stop earlier
+  train_batch_size: 256
+  train_lr: "1e-5"
+
+# different argument sets to pass to training module
+train_configs:
+  train_nonoise: "--batch 64 --lr 0.001 --noise_method none"
+  train_pca_noise: "--batch 64 --lr 0.001 --noise_method pca"
+
+# parameters for the synthetic dataset generation
+synthetic:
+  num_samples: 10000 # total number of synthetic data samples
+  num_batches: 10 # number of subdivisions for splitting computations
+  areamode: 'collection' # options are ['straight_tube', 'collection']
+  jitter_lb: 0.9 # lower bound for random jittering of optimization parameters to generate synthetic data for training
+  jitter_ub: 1.1 # lower bound for random jittering of optimization parameters to generate synthetic data for training
+
+# parameters used in the fMRI acquisition protocol
+scan_param:
+  slice_width: 0.25 # cm
+  repetition_time: 0.378 # seconds
+  echo_time: 0.031 # seconds
+  flip_angle: 37 # degrees
+  t1_time: 4 # seconds
+  t2_time: 1.5 # seconds
+  num_slice: 20 # total number of slices acquired
+  num_pulse: 300 # number of simulated repetition cycles
+  num_pulse_baseline_offset: 20 # number of initial pulses to discard
+  MBF: 4 # multiband factor, i.e. how many slices are acquired simultaneously
+  alpha_list: # the slice RF excitation timings
+    - 0
+    - 0.215
+    - 0.0725
+    - 0.2875
+    - 0.145
+    - 0
+    - 0.215
+    - 0.0725
+    - 0.2875
+    - 0.145
+    - 0
+    - 0.215
+    - 0.0725
+    - 0.2875
+    - 0.145
+    - 0
+    - 0.215
+    - 0.0725
+    - 0.2875
+    - 0.145
+
