@@ -103,14 +103,15 @@ rule automask:
         outdir = f"{PREPDIR}/{{sub}}/{{ses}}/{{run}}/automask",
         fs_container = config["paths"]["fs_container"],
         bind_container = config["paths"]["bind_container"],
-        nslice = config["params"]["nslice"]
+        nslice = config["nslice_to_use"],
+        dummy_flag = "--dummy_run" if config["dummy_run"] else ""
     resources:
         runtime = 30, nodes = 1, cpus_per_task = 1, mem_mb = 24000,
         slurm_partition = "mit_preemptable"
     shell:
         "python -m tofinv.masking --func {input.func} --sbref {input.sbref} "
         "--nslice_to_keep {params.nslice} --outdir {params.outdir} "
-        "--container {params.fs_container} --container_bind {params.bind_container}"
+        "--container {params.fs_container} --container_bind {params.bind_container} {params.dummy_flag}"
 
 rule noise:
     input:
@@ -149,6 +150,7 @@ rule optim:
         done = touch(f"{PREPDIR}/{{sub}}/{{ses}}/{{run}}/optim/.optim_done")
     params:
         outdir = f"{PREPDIR}/{{sub}}/{{ses}}/{{run}}/optim"
+    threads: config["resources"]["threads_low"]
     resources:
         runtime = 240, nodes = 1, cpus_per_task = 20, mem_mb = 42000,
         slurm_partition = "mit_preemptable"
@@ -165,7 +167,7 @@ rule aggregate_noise:
     output:
         noise_data = f"{DATADIR}/noise_data.pkl"
     params:
-        length = config["params"]["sample_length"],
+        length = config["scan_param"]["num_pulse"],
         search_dir = PREPDIR
     resources:
         runtime = 20, nodes = 1, cpus_per_task = 1, mem_mb = 20000,               
@@ -221,7 +223,7 @@ rule synthdata_sampling:
     output: 
         pkl = f"{SYNTHDIR}/inputs_batched/task{{batch}}.pkl"
     group: "sampling"
-    threads: config["params"]["threads_high"]
+    threads: config["resources"]["threads_high"]
     resources:
         runtime = 20, nodes = 1, cpus_per_task = 1, mem_mb = 8000, slurm_partition = "mit_preemptable"
     shell:
@@ -235,7 +237,7 @@ rule synthdata_sort:
         sort_done = temp(touch(f"{SYNTHDIR}/inputs_batched_sorted/.sort_done"))
     params:
         outdir = f"{SYNTHDIR}/inputs_batched_sorted",
-        batch_size = config["params"]["batch_size"]
+        batch_size = config["synthetic"]["num_samples"] // config["synthetic"]['num_batches']
     resources:
         runtime = 60, nodes = 1, cpus_per_task = 1, mem_mb = 32000, slurm_partition = "mit_normal",
     shell:
@@ -251,7 +253,7 @@ rule synthdata_simulate:
         input_dir = f"{SYNTHDIR}/inputs_batched_sorted",
         output_dir = f"{SYNTHDIR}/simulations_batched/batch_{{batch}}"
     group: "simulation"
-    threads: config["params"]["threads_high"]
+    threads: config["resources"]["threads_high"]
     resources:
         runtime = 240, nodes = 1, cpus_per_task = 5, mem_mb = 16000, slurm_partition = "mit_preemptable"
     shell:
@@ -263,7 +265,7 @@ rule synthdata_combine:
         dones = expand(f"{SYNTHDIR}/simulations_batched/batch_{{batch}}/.sim_done", batch=range(1, config["synthetic"]['num_batches'] + 1))
     output:
         final_pkl = f"{SYNTHDIR}/dataset.pkl"
-    threads: config["params"]["threads_high"]
+    threads: config["resources"]["threads_high"]
     resources:
         runtime = 120, nodes = 1, cpus_per_task = 64, mem_mb = 100000, slurm_partition = "mit_normal"
     shell:
@@ -294,9 +296,9 @@ rule train_model:
         model = f"{EXPDIR}/{{exp}}/best_model.pth"
     params:
         train_args = get_train_args,
-        epochs = config["params"]["train_epochs"],
-        batch = config["params"]["train_batch_size"],
-        lr = config["params"]["train_lr"],
+        epochs = config["train"]["train_epochs"],
+        batch = config["train"]["train_batch_size"],
+        lr = config["train"]["train_lr"],
         outdir = f"{EXPDIR}/{{exp}}"
     resources:
         runtime = 240, nodes = 1, cpus_per_task = 1, mem_mb = 64000, slurm_partition = "mit_preemptable", slurm_extra = "--gres=gpu:1"
@@ -325,7 +327,7 @@ rule evaluate:
         config = CONFIG_YML
     output:
         velocity = f"{EVALDIR}/{{exp}}/{{sub}}/{{ses}}/{{run}}/velocity_predicted.txt"
-    threads: config["params"]["threads_low"]
+    threads: config["resources"]["threads_low"]
     params:
         outdir = f"{EVALDIR}/{{exp}}/{{sub}}/{{ses}}/{{run}}"
     resources:
