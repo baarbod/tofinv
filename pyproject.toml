@@ -15,7 +15,7 @@ dependencies = [
     "numpy==2.4.3",
     "omegaconf==2.3.0",
     "pandas==3.0.1",
-    "scikit-learn==1.8.0",
+    "scikit-learn==1.7.2",
     "scikit-optimize==0.10.2",
     "scipy==1.17.1",
     "seaborn==0.13.2",
