@@ -8,7 +8,7 @@ import torch
 import matplotlib.pyplot as plt
 from omegaconf import OmegaConf
 
-from tofmodel.inverse.models import TOFinverse
+from tofinv.nn_models import TOFinverse
 import tofinv.utils as utils
 from tofmodel.forward import posfunclib as pfl
 from tofmodel.forward import simulate as tm

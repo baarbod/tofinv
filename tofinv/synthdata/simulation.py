@@ -9,7 +9,7 @@ from functools import partial
 import numpy as np
 import time
 
-import tofmodel.inverse.utils as utils
+import tofinv.utils as utils
 from tofmodel.forward import posfunclib as pfl
 from tofmodel.forward import simulate as tm
 

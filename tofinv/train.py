@@ -12,11 +12,9 @@ import time
 import argparse
 import json
 
-from tofmodel.inverse.models import TOFinverse
-import tofmodel.inverse.utils as utils
-import tofmodel.inverse.noise as noise
-import tofmodel.inverse.evaluation as eval
-from tofinv.utils import scale_data, scale_area
+from tofinv.nn_models import TOFinverse
+import tofinv.utils as utils
+import tofinv.noise_injection as noise
 
 class SurrogateConv1D(nn.Module):
     def __init__(self, in_channels, out_channels, hidden_dim=64):
@@ -71,12 +69,12 @@ def load_dataset(dataset, noisedir=None, noise_method='none', gauss_low=0.01, ga
     # Scale signals and area
     for i in range(X.shape[0]):
         to_scale = X[i, :nslice_to_use, :].T 
-        scaled = scale_data(to_scale).T
+        scaled = utils.scale_data(to_scale).T
         X[i, :nslice_to_use, :] = scaled 
         
         xarea_single = X[i, pos_idx, :]
         area_single = X[i, area_idx, :]
-        X[i, area_idx, :] = scale_area(xarea_single, area_single)
+        X[i, area_idx, :] = utils.scale_area(xarea_single, area_single)
         
     # Split the inputs
     flow_x = X[:, :nslice_to_use, :]
