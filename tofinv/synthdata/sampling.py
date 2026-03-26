@@ -43,7 +43,7 @@ def generate_batch(param, optim_data_list, area_lookup, task_id):
     base_seed = 42
     rng = np.random.default_rng(base_seed + task_id)
     
-    frequencies = np.fft.rfftfreq(ds.num_time_point, d=param.scan_param.repetition_time)
+    frequencies = np.fft.rfftfreq(param.scan_param.num_pulse, d=param.scan_param.repetition_time)
     batch_params = []
     n_optim = len(optim_data_list)
     keys_area = list(area_lookup.keys())
@@ -54,7 +54,7 @@ def generate_batch(param, optim_data_list, area_lookup, task_id):
             
         ind_random = rng.integers(0, n_optim)
         vbase, optim_param, sub_name = optim_data_list[ind_random]
-        jitter_vector = rng.uniform(0.9, 1.1, size=len(optim_param))
+        jitter_vector = rng.uniform(ds.jitter_lb, ds.jitter_ub, size=len(optim_param))
         res_x_jittered = optim_param * jitter_vector
         random_voffset = res_x_jittered[-1]
         phase_base = np.angle(np.fft.rfft(vbase))
@@ -64,14 +64,14 @@ def generate_batch(param, optim_data_list, area_lookup, task_id):
         V_freq = np.fft.rfft(vopt_demean, axis=0)
         amp_raw = np.abs(V_freq)
         
-        if param.synthetic.areamode == 'collection':
+        if ds.areamode == 'collection':
             if sub_name in area_lookup:
                 xarea_raw, area_raw = area_lookup[sub_name]
             else:
                 logger.warning(f"Subject {sub_name} not found in area collection. Picking random.")
                 random_sub = rng.choice(keys_area)
                 xarea_raw, area_raw = area_lookup[random_sub]
-            x_new = np.linspace(0, 1, ds.num_time_point)
+            x_new = np.linspace(0, 1, param.scan_param.num_pulse)
             x_old = np.linspace(0, 1, xarea_raw.size)
             xarea = np.interp(x_new, x_old, xarea_raw)
             area = np.interp(x_new, x_old, area_raw)
@@ -111,20 +111,20 @@ if __name__ == "__main__":
     parser.add_argument("--taskid", type=int, default=1)
     args = parser.parse_args()
 
-    cfg = OmegaConf.load(args.config)
+    param = OmegaConf.load(args.config)
     
     with open(args.optim_path, 'rb') as f:
         optim_data_list = pickle.load(f)
     
-    if cfg.synthetic.areamode == 'straight_tube':
-        x_fixed = np.linspace(-3, 3, cfg.synthetic.num_time_point)
+    if param.synthetic.areamode == 'straight_tube':
+        x_fixed = np.linspace(-3, 3, param.scan_param.num_pulse)
         area_lookup = { "default": (x_fixed, np.ones_like(x_fixed)) }
-    elif cfg.synthetic.areamode == 'collection': 
+    elif param.synthetic.areamode == 'collection': 
         with open(args.area_path, 'rb') as f:
             area_raw_list = pickle.load(f)
         area_lookup = {sub: (xa, a) for xa, a, sub in area_raw_list}
 
-    batch_data = generate_batch(cfg, optim_data_list, area_lookup, args.taskid)
+    batch_data = generate_batch(param, optim_data_list, area_lookup, args.taskid)
     
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
     with open(args.output, "wb") as f:
