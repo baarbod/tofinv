@@ -73,15 +73,31 @@ def create_slice_montage(anat_slices, mask_slices, aseg_slices, depth_values, ou
     for text in legend.get_texts():
         text.set_color('white')
     plt.tight_layout(rect=[0, 0, 1, 0.95])
-    plt.savefig(output_path, dpi=200, bbox_inches='tight', facecolor='black') # Black background for final image
+    plt.savefig(output_path, dpi=200, bbox_inches='tight', facecolor='black')
     plt.close()
     
-def compute_area(func_path, anat_path, aseg_path, reg_path, output_path):
+def compute_area(func_path, anat_path, aseg_path, reg_path, output_path, func_vox=2.5, anat_vox=1.0):
     func_img, anat_img, aseg_img = nib.load(func_path), nib.load(anat_path), nib.load(aseg_path)
     func_data, anat_data, aseg_data = func_img.get_fdata(), anat_img.get_fdata(), aseg_img.get_fdata()
     
-    anatVOX2RAS = np.array([[-1, 0, 0, 0.5*aseg_data.shape[0]], [0, 0, 1, -0.5*aseg_data.shape[2]], [0, -1, 0, 0.5*aseg_data.shape[1]], [0, 0, 0, 1]])
-    funcVOX2RAS = np.array([[-2.5, 0, 0, 1.25*func_data.shape[0]], [0, 0, 2.5, -1.25*func_data.shape[2]], [0, -2.5, 0, 1.25*func_data.shape[1]], [0, 0, 0, 1]])
+    # Parameterized Affine Matrices
+    anat_half = anat_vox / 2.0
+    func_half = func_vox / 2.0
+
+    anatVOX2RAS = np.array([
+        [-anat_vox, 0, 0, anat_half * aseg_data.shape[0]], 
+        [0, 0, anat_vox, -anat_half * aseg_data.shape[2]], 
+        [0, -anat_vox, 0, anat_half * aseg_data.shape[1]], 
+        [0, 0, 0, 1]
+    ])
+    
+    funcVOX2RAS = np.array([
+        [-func_vox, 0, 0, func_half * func_data.shape[0]], 
+        [0, 0, func_vox, -func_half * func_data.shape[2]], 
+        [0, -func_vox, 0, func_half * func_data.shape[1]], 
+        [0, 0, 0, 1]
+    ])
+    
     R = np.loadtxt(reg_path, skiprows=4, max_rows=4) 
 
     aseg_data[aseg_data != 15] = 0
@@ -89,8 +105,11 @@ def compute_area(func_path, anat_path, aseg_path, reg_path, output_path):
     init_funcCRS = np.linalg.inv(funcVOX2RAS) @ R @ anatVOX2RAS @ np.array([*centroid_3d, 1]).T
     funcCRS0 = np.array([int(np.floor(init_funcCRS[0])), int(np.floor(init_funcCRS[1])), 0, 1])
 
-    incr, lenx, leny = 0.2, 2.5, 2.5
+    # Parameterized dimensions for area computation
+    incr = 0.2
+    lenx = leny = func_vox
     voxel_area = (incr * lenx) * (incr * leny)
+    
     deltax = deltay = np.arange(-8, 8 + incr, incr)
     deltaz = np.arange(-25, 25 + incr, incr)
     
@@ -125,11 +144,14 @@ def compute_area(func_path, anat_path, aseg_path, reg_path, output_path):
             area_scaled = Aslice * (ref / T1slice)
             A[i] = np.nansum(area_scaled)
 
-    depthfromslc1 = deltaz * 2.5 
+    # Convert functional voxel depth to mm
+    depthfromslc1 = deltaz * func_vox 
     A = add_boundary(A, depthfromslc1)
     
     # Save results (converting to cm/cm2)
-    depth_cm, A_cm2 = depthfromslc1 * 0.1, A * 0.01
+    depth_cm = depthfromslc1 * 0.1
+    A_cm2 = A * 0.01
+    
     out_dir = Path(output_path)
     out_dir.mkdir(parents=True, exist_ok=True)
     np.savetxt(out_dir / "area.txt", np.column_stack([depth_cm, A_cm2]), fmt="%.6f")
@@ -144,7 +166,6 @@ def compute_area(func_path, anat_path, aseg_path, reg_path, output_path):
     plt.close()
 
     out_dir = Path(output_path)
-    depth_cm = deltaz * 2.5 * 0.1
     create_slice_montage(
         viz_anat, 
         area_contribution, 
@@ -186,6 +207,10 @@ def main():
     parser.add_argument('--aseg', type=str)
     parser.add_argument('--reg', type=str)
     
+    # Voxel Parameters
+    parser.add_argument('--func_vox', type=float, default=2.5, help="Isotropic functional voxel size (mm)")
+    parser.add_argument('--anat_vox', type=float, default=1.0, help="Isotropic anatomical voxel size (mm)")
+
     # Shared/Collection args
     parser.add_argument('--outdir', type=str, help="Output dir for compute, or Search dir for collect")
     parser.add_argument('--outfile', type=str, help="Path for the final pickle (use with --collect)")
@@ -195,10 +220,8 @@ def main():
     if args.collect:
         aggregate_area(args.outdir, args.outfile)
     else:
-        compute_area(args.func, args.anat, args.aseg, args.reg, args.outdir)
-
-if __name__ == "__main__":
-    main()
+        compute_area(args.func, args.anat, args.aseg, args.reg, args.outdir, 
+                     func_vox=args.func_vox, anat_vox=args.anat_vox)
 
 if __name__ == "__main__":
     main()
