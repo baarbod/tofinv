@@ -141,7 +141,7 @@ rule area:
         slurm_partition = "mit_normal"
     shell:
         "python -m tofinv.area --func {input.func} --anat {input.anat} "
-        "--aseg {input.aseg} --reg {input.reg} --outdir {output.area_dir} --func_vox {param.func_vox_mm}"
+        "--aseg {input.aseg} --reg {input.reg} --outdir {output.area_dir} --func_vox {params.func_vox_mm}"
 
 rule optim:
     input:
