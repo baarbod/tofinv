@@ -46,14 +46,16 @@ pip install .
 ```
 
 The pipeline currently uses the Synthseg tool which requires Freesurfer 7.3.2+.
-You will need to install a Freesurfer container and then later in the config file you'll specify the path to the container as well as bind directories for where your data is stored. \
+You will need to install a Freesurfer container and then later in the config file you'll specify the path to the container as well as bind directories for where your data is stored.
 
-For the next phase where we test on dummy data, you don't need to have this container set up, but you will need when you're ready to run on you real data.
+For the next phase where we test on dummy data, you don't need to have this container set up, but you will need it when you're ready to run on your real data.
 
 
 ### Phase 1: Test run with dummy data
 
 Before running on your own data, we recommend executing a test run using generated dummy data to ensure your environment is set up correctly and the pipeline executes as expected.
+
+NOTE: I have included a pre-generated dummy data folder because the `generate_dummy_data.py` can potentially take a long time to complete. I'm investigating this, but for now just skip the generation and you can proceed to the next step of running `run_dummy.sh`
 
 Generate the dummy data (This will create a dummy_data folder in your repository.):
 ```bash
