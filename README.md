@@ -1,6 +1,6 @@
 # tofinv
 
-This repository contains an end-to-end pipeline that estimates cerebrospinal fluid (CSF) flow velocity from fMRI inflow signals in the 4th ventricle. 
+This repository contains an end-to-end pipeline that estimates cerebrospinal fluid (CSF) flow velocity from fMRI inflow signals due to inflow effects. 
 
 This framework is based on our prior work. If you use this pipeline, please cite this:
 
@@ -10,8 +10,9 @@ This framework is based on our prior work. If you use this pipeline, please cite
 ## PREREQUISITES
 
 * **Operating System:** A Linux environment is required to run this pipeline.
-* **Python:** Version `3.10.14`. I tested the code on this version so use other versions at your own risk.
+* **Python:** Version `3.10.14` is required.
 * **Hardware:** While the pipeline can run locally, it is recommended to run this on a computing cluster (e.g., using SLURM). For testing on the dummy data (see below) you can run locally.
+* **Resources:** The pipeline runtime will scale with number of available CPUs. Also, it is highly recommended to have at least 1 CUDA GPU for neural network training.
 
 ## GETTING STARTED
 
@@ -53,7 +54,7 @@ For the next phase where we test on dummy data, you don't need to have this cont
 
 ### Phase 1: Test run with dummy data
 
-Before running on your own data, we recommend executing a test run using generated dummy data to ensure your environment is set up correctly and the pipeline executes as expected.
+Before running on your own data, I recommend executing a test run using generated dummy data to ensure your environment is set up correctly and the pipeline executes as expected.
 
 NOTE: I have included a pre-generated dummy data folder because the `generate_dummy_data.py` can potentially take a long time to complete. I'm investigating this, but for now just skip the generation and you can proceed to the next step of running `run_dummy.sh`
 
@@ -80,10 +81,10 @@ Each row in this file corresponds to one input sample. Please maintain the exact
 2. **Session Name**
 3. **Run Name**
 4. **Raw fMRI Volume:** Path to the raw fMRI volume.
-5. **Raw SBRef Volume:** Path to the raw single-band reference (SBRef) volume.
-6. **T1-Weighted Anatomical Image:** Path to the anatomical image (e.g., MPRAGE).
-7. **Anatomical Segmentation Volume:** Path to the segmentation volume (e.g., the `aseg.nii` file generated from `recon-all`).
-8. **Registration File:** Path to the functional-to-anatomical registration file.
+5. **Raw SBRef Volume:** Path to the raw single-band reference volume (if unavailable, use the functional data averaged across time).
+6. **T1-Weighted Anatomical Image:** Path to the anatomical image (use the `orig.mgz` file generated from `recon-all`).
+7. **Anatomical Segmentation Volume:** Path to the segmentation volume (use the `aseg.mgz` file generated from `recon-all`).
+8. **Registration File:** Path to output FreeSurfer registration file.
 
 Configure your parameters. 
 Use `config/config_base.yml` as your starting point (do not use `config_dummy.yml` for real data). 
