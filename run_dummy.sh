@@ -6,7 +6,7 @@
 CONFIG=config/config_dummy.yml
 
 # number of available CPUs on the local machine
-ncpu=35
+ncpu= # INPUT VALUE HERE
 
 # unlock the workflow in case it was locked by a previous run
 snakemake --unlock --configfile $CONFIG
