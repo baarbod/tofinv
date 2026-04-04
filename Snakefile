@@ -24,6 +24,7 @@ manifest = pd.read_csv(
     config["paths"]["input_manifest"], 
     header=0 if "subject" in open(config["paths"]["input_manifest"]).readline() else None,
     quotechar='"',
+    skipinitialspace=True,
     names=["sub", "ses", "run", "func", "sbref", "anat", "aseg", "reg"]
 )
 manifest.set_index(["sub", "ses", "run"], drop=False, inplace=True)
@@ -106,7 +107,7 @@ rule automask:
         nslice = config["nslice_to_use"],
         dummy_flag = "--dummy_run" if config["dummy_run"] else ""
     resources:
-        runtime = 30, nodes = 1, cpus_per_task = 1, mem_mb = 24000,
+        runtime = 120, nodes = 1, cpus_per_task = 1, mem_mb = 24000,
         slurm_partition = "mit_preemptable"
     shell:
         "python -m tofinv.masking --func {input.func} --sbref {input.sbref} "
@@ -137,7 +138,7 @@ rule area:
     params:
         func_vox_mm = config["scan_param"]["slice_width"]*10
     resources:
-        runtime = 30, nodes = 1, cpus_per_task = 1, mem_mb = 16000,
+        runtime = 120, nodes = 1, cpus_per_task = 1, mem_mb = 16000,
         slurm_partition = "mit_normal"
     shell:
         "python -m tofinv.area --func {input.func} --anat {input.anat} "
@@ -227,7 +228,7 @@ rule synthdata_sampling:
     group: "sampling"
     threads: config["resources"]["threads_high"]
     resources:
-        runtime = 20, nodes = 1, cpus_per_task = 1, mem_mb = 8000, slurm_partition = "mit_preemptable"
+        runtime = 120, nodes = 1, cpus_per_task = 1, mem_mb = 8000, slurm_partition = "mit_preemptable"
     shell:
         "python -m tofinv.synthdata.sampling --config {input.config} --taskid {wildcards.batch} "
         "--optim_path {input.voptim} --area_path {input.area_collection} --output {output.pkl}"
@@ -269,7 +270,7 @@ rule synthdata_combine:
         final_pkl = f"{SYNTHDIR}/dataset.pkl"
     threads: config["resources"]["threads_high"]
     resources:
-        runtime = 120, nodes = 1, cpus_per_task = 64, mem_mb = 100000, slurm_partition = "mit_normal"
+        runtime = 240, nodes = 1, cpus_per_task = 64, mem_mb = 100000, slurm_partition = "mit_normal"
     shell:
         "python -m tofinv.synthdata.processing combine --sim_dir {SYNTHDIR}/simulations_batched --output_dir {SYNTHDIR}"
 
