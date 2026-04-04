@@ -70,7 +70,7 @@ def main():
     run_automask(
         func=args.func,
         sbref=str(sbref_fixed),
-        synthseg=str(mask_path),
+        boundmask=str(mask_path),
         outdir=str(outdir),
         metrics_list_names=['skew', 'sbref']
     )
