@@ -18,7 +18,7 @@ optim:
     - [0.0001, 5.0] # frequency gain factor
     - [-0.3, 0.3] # velocity offset
   x0: [0.5, 2.0, 0.05] # initial guess for the optimization
-  n_calls: 200 # number of optimization iterations (including initial points)
+  n_calls: 100 # number of optimization iterations (including initial points)
   n_initial_points: 50 # number of initial random points to sample before starting the optimization
   initial_point_generator: "lhs" # method for generating initial random points, options are ["random", "lhs", "sobol"]
   acq_optimizer: "lbfgs" # method for optimizing the acquisition function, options are ["lbfgs", "sampling"]
