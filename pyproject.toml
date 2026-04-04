@@ -25,6 +25,9 @@ dependencies = [
     "PuLP==2.7.0",
     
     # Custom GitHub Packages
-    "tofmodel @ git+https://github.com/baarbod/tofmodel.git@master",
-    "autocsfmask @ git+https://github.com/baarbod/autocsfmask.git@master"
+    "tofmodel @ git+https://github.com/baarbod/tofmodel.git@v2.0.0",
+    "autocsfmask @ git+https://github.com/baarbod/autocsfmask.git@v1.0.0"
 ]
+
+[tool.setuptools.packages.find]
+where = ["."]
