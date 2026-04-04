@@ -10,15 +10,18 @@ import tofinv.evaluation as eval
 import tofinv.utils as utils
 import skopt
 from scipy.signal.windows import tukey
+from scipy.signal import find_peaks # Added for adaptive peak detection
 
 def transform(vbase, params, phase_input):
     v_scale, beta, voffset = params
+    voffset = 0
     v = vbase * v_scale
-    V = np.abs(np.fft.rfft(v))
-    freq_norm = np.linspace(0, 1, len(V))
+    V = np.fft.rfft(v) 
+    V_mag = np.abs(V)
+    freq_norm = np.linspace(0, 1, len(V_mag))
     gain_curve = np.exp(beta * freq_norm)
     weighted_gain = 1 + (gain_curve - 1)
-    V_scaled = V * weighted_gain
+    V_scaled = V_mag * weighted_gain
     vout = utils.define_velocity_fourier(V_scaled, vbase.size, phase_input, voffset)
     return make_periodic(vout)
 
@@ -50,7 +53,6 @@ def make_periodic(signal, alpha=0.1):
 def run_optimization(signal_path, area_path, config_path, outdir):
     param = OmegaConf.load(config_path)
 
-    # extract optim keywords and convert dimensions to tuples
     optim_kwargs = OmegaConf.to_container(param.optim, resolve=True)
     optim_kwargs["dimensions"] = [tuple(dim) for dim in optim_kwargs["dimensions"]]    
     
@@ -70,14 +72,36 @@ def run_optimization(signal_path, area_path, config_path, outdir):
     window_size = param.scan_param.num_pulse
     nwindows = np.min([s_raw_full.shape[0] // window_size, 3]) 
     all_v_bases, all_opt_params = [], []
-    
+    from scipy.ndimage import gaussian_filter1d
     for i in range(nwindows):
         print(f"[*] Optimizing Window {i}...")
         s_raw = s_raw_full[i*window_size : (i+1)*window_size, :]
         
-        v_base = (s_raw[:, 0] - s_raw[:, 0].mean()) / (s_raw[:, 0].max() + 1e-9)
-        v_base = make_periodic(v_base)
+        raw_sig = s_raw[:, 0] - np.mean(s_raw[:, 0])
+        V_fft = np.fft.rfft(raw_sig)
+        V_mag, V_phase = np.abs(V_fft), np.angle(V_fft)
+        V_mag_smooth = gaussian_filter1d(V_mag, sigma=1.5)
+        power_factor = 3.0 
+        V_mag_selective = V_mag_smooth ** power_factor
         
+        fig_dbg, ax_dbg = plt.subplots(figsize=(10, 5))
+        plot_scale = np.max(V_mag_smooth) / np.max(V_mag_selective)
+        ax_dbg.plot(V_mag, color='black', alpha=0.3, label='Original FFT Mag')
+        ax_dbg.plot(V_mag_smooth, color='blue', alpha=0.4, linewidth=2, label='Standard Gaussian')
+        ax_dbg.plot(V_mag_selective * plot_scale, color='red', linewidth=2, label=f'Power Law (x^{power_factor})')
+        
+        ax_dbg.set_title(f'Window {i} - Power Law Attenuation (Method 1)')
+        ax_dbg.legend()
+        ax_dbg.grid(True, alpha=0.3)
+        
+        debug_plot_path = plots_dir / f'vbase_smoothing_win{i}.png'
+        fig_dbg.savefig(debug_plot_path)
+        plt.close(fig_dbg)
+        
+        V_reconstructed = V_mag_selective * np.exp(1j * V_phase)
+        v_base_time = np.fft.irfft(V_reconstructed, n=len(raw_sig))
+        v_base = v_base_time / (np.max(np.abs(v_base_time)) + 1e-9)
+        v_base = make_periodic(v_base)
         phase = np.angle(np.fft.rfft(v_base))
         
         s_target = utils.scale_data(s_raw)
@@ -91,14 +115,13 @@ def run_optimization(signal_path, area_path, config_path, outdir):
         def objective(p):
             v_opt = transform(v_base, p, phase)
             
-            ssim = eval.run_forward_model(v_opt, xarea, area, param, ncpu=-1)#[num_offset:, :]
+            ssim = eval.run_forward_model(v_opt, xarea, area, param, ncpu=-1)
             ssim_scaled = utils.scale_data(ssim)
             psd_sim = np.abs(np.fft.rfft(ssim_scaled, axis=0))
             if np.any(np.isnan(psd_sim)):
                 return 1e6
             
             psd_sim = psd_sim[1:, :]
-            
             freq_err = compute_err(psd_sim, psd_measured, rms)
             return freq_err
 
@@ -107,7 +130,6 @@ def run_optimization(signal_path, area_path, config_path, outdir):
         all_v_bases.append(v_base)
         all_opt_params.append(res.x)
 
-        # Delete the problematic references
         if 'callbacks' in res.specs:
             del res.specs['callbacks']
         res.specs['args']['func'] = None 
@@ -115,10 +137,8 @@ def run_optimization(signal_path, area_path, config_path, outdir):
         dump(res, outdir / f'optim_result_win{i}.pkl')
         
         # ---------------- DIAGNOSTIC FIGURES ----------------
-        # Generate the optimized velocity and model prediction
         v_opt = transform(v_base, res.x, phase)
         
-        # Run forward model
         ssim_opt = eval.run_forward_model(v_opt, xarea, area, param, ncpu=24)        
         ssim_opt_plot = utils.scale_data(ssim_opt)
         
@@ -170,24 +190,19 @@ def run_optimization(signal_path, area_path, config_path, outdir):
         plt.close(fig_fd)
         
         # 4. Bayesian Optimization Plots
-        # Convergence
         conv_ax = plot_convergence(res)
         conv_ax.set_title(f"Convergence (Window {i})")
         conv_ax.get_figure().savefig(plots_dir / f'convergence_win{i}.png')
         
-        # Evaluations (Hyperparameter space search)
         eval_axes = plot_evaluations(res)
-        # plot_evaluations returns an array of axes; we grab the figure from the first one
         eval_axes.get_figure().savefig(plots_dir / f'evaluations_win{i}.png')
         
         plt.close('all')
 
-        # Final Save
         np.savetxt(outdir / 'base_velocity.txt', np.column_stack(all_v_bases))
         np.savetxt(outdir / 'optim_param.txt', np.array(all_opt_params))
 
 # --- AGGREGATION LOGIC ---
-
 def aggregate_optim(search_dir, outfile):
     search_path = Path(search_dir)
     data_triplets = [] 
