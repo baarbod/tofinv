@@ -41,8 +41,8 @@ train_configs:
 
 # parameters for the synthetic dataset generation
 synthetic:
-  num_samples: 10000 # total number of synthetic data samples
-  num_batches: 10 # number of subdivisions for splitting computations
+  num_samples: 50000 # total number of synthetic data samples (you can increase this for better performance at the cost of longer runtime)
+  num_batches: 50 # number of subdivisions for splitting computations
   areamode: 'collection' # options are ['straight_tube', 'collection']
   jitter_lb: 0.9 # lower bound for random jittering of optimization parameters to generate synthetic data for training
   jitter_ub: 1.1 # lower bound for random jittering of optimization parameters to generate synthetic data for training
