@@ -25,8 +25,8 @@ def main():
     parser.add_argument("--sbref", required=True)
     parser.add_argument("--nslice_to_keep", required=True, type=int)
     parser.add_argument("--outdir", required=True)
-    parser.add_argument("--container", required=True, help="Path to freesurfer container file")
-    parser.add_argument("--container_bind", required=True, help="Paths to bind for apptainer")
+    parser.add_argument("--container", help="Path to freesurfer container file")
+    parser.add_argument("--container_bind", help="Paths to bind for apptainer")
     parser.add_argument("--dummy_run", action="store_true", help="flag when running with dummy data, which will skip running SynthSeg and use a pre-generated mask instead")
     
     args = parser.parse_args()
@@ -38,18 +38,26 @@ def main():
     fix_sbref(args.sbref, sbref_fixed)
 
     container = args.container
-    print(f"[*] Running SynthSeg via {args.container}")
-    
     if args.dummy_run:
         print("[*] Running in dummy mode, skipping SynthSeg and using pre-generated mask.")
         func_dir = pathlib.Path(args.func).parent
         dummy_mask_path = func_dir / "aseg_sbref_space.nii.gz"
         subprocess.run(["cp", str(dummy_mask_path), str(outdir / "SBRef_fixed_synthseg.nii.gz")])
     else:
-        subprocess.run([
-            "apptainer", "exec", "-B", args.container_bind,
-            container, "mri_synthseg", "--i", str(sbref_fixed), "--o", str(outdir),
-        ], check=True)
+        cmd = ["mri_synthseg", "--i", str(sbref_fixed), "--o", str(outdir)]
+        use_container = args.container and args.container.lower() != "none"
+        if use_container:
+            print(f"[*] Running SynthSeg via Container: {args.container}")
+            # Only add bind if it's also not "None"
+            if args.container_bind and args.container_bind.lower() != "none":
+                bind_args = ["-B", args.container_bind]
+            else:
+                bind_args = []
+            cmd = ["apptainer", "exec"] + bind_args + [args.container] + cmd
+        else:
+            print("[*] Running SynthSeg via local FreeSurfer module")
+        subprocess.run(cmd, check=True)
+
     
     synthseg_file = outdir / "SBRef_fixed_synthseg.nii.gz"
     resampled = sf.load_volume(synthseg_file).resample_like(sf.load_volume(sbref_fixed), method='nearest')
