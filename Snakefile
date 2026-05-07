@@ -155,7 +155,7 @@ rule optim:
         outdir = f"{PREPDIR}/{{sub}}/{{ses}}/{{run}}/optim"
     threads: config["resources"]["threads_low"]
     resources:
-        runtime = 240, nodes = 1, cpus_per_task = 20, mem_mb = 42000,
+        runtime = 320, nodes = 1, cpus_per_task = 20, mem_mb = 42000,
         slurm_partition = "mit_preemptable"
     shell:
         "python -m tofinv.optim --signal {input.signal} --area {input.area} "
