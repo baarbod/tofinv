@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tofinv"
-version = "1.0.0"
+version = "1.1"
 description = "Velocity quantification pipeline"
 requires-python = ">=3.10"
 dependencies = [
@@ -25,7 +25,7 @@ dependencies = [
     "PuLP==2.7.0",
     
     # Custom GitHub Packages
-    "tofmodel @ git+https://github.com/baarbod/tofmodel.git@v2.0.0",
+    "tofmodel @ git+https://github.com/baarbod/tofmodel.git@v2.1",
     "autocsfmask @ git+https://github.com/baarbod/autocsfmask.git@v1.0.0"
 ]
 
