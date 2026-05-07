@@ -11,65 +11,38 @@ This framework is based on our prior work. If you use this pipeline, please cite
 
 * **Operating System:** A Linux environment is required to run this pipeline.
 * **Python:** Version `3.10.14` is required.
-* **Hardware:** While the pipeline can run locally, it is recommended to run this on a computing cluster (e.g., using SLURM). For testing on the dummy data (see below) you can run locally.
-* **Resources:** The pipeline runtime will scale with number of available CPUs. Also, it is highly recommended to have at least 1 CUDA GPU for neural network training.
+* **Hardware:** The pipeline speed scales with number of available CPUs. At least 1 GPU is recommended for neural network training stages.
+* **Software:** This pipeline relies on FreeSurfer (7.3.2+) or a FreeSurfer Apptainer/Singularity container for SynthSeg segmentation.
 
 ## GETTING STARTED
 
-### Phase 0: Setup and Installation
+### Setup and Installation
 
-Create a new directory (optional but recommended)
+We recommend using a virtual environment to manage dependencies:
 ```bash
-mkdir -p repos
-cd repos
-```
-If you already have a python environment, you can skip the next couple of steps. \
-To create an isolated Python virtual environment, run the following command (replace `python3.10` with your specific path if needed):
-```bash
+# Create and activate environment
 python3.10 -m venv .venv
-```
-Then activate the environment
-```bash
 source .venv/bin/activate
-``` 
 
-Clone the repository
-```bash
+# Clone and install
 git clone https://github.com/baarbod/tofinv.git
-```
-Navigate into the cloned repository
-```bash
 cd tofinv
-```
-Install the package and all dependencies
-```bash
 pip install .
 ```
 
-The pipeline currently uses the Synthseg tool which requires Freesurfer 7.3.2+.
-You will need to install a Freesurfer container and then later in the config file you'll specify the path to the container as well as bind directories for where your data is stored.
-
-For the next phase where we test on dummy data, you don't need to have this container set up, but you will need it when you're ready to run on your real data.
+NOTE: If your system has Freesurfer 7.3.2+, then ensure the module is loaded when running the pipeline. If you want to use an Apptainer/Singularity container instead, change the fs_container and bind_container config parameters from null to the corresponding paths.
 
 
-### Phase 1: Test run with dummy data
+### Test run with dummy data
 
-Before running on your own data, I recommend executing a test run using generated dummy data to ensure your environment is set up correctly and the pipeline executes as expected.
-
-NOTE: I have included a pre-generated dummy data folder because the `generate_dummy_data.py` can potentially take a long time to complete. I'm investigating this, but for now just skip the generation and you can proceed to the next step of running `run_dummy.sh`
-
-Generate the dummy data (This will create a dummy_data folder in your repository.):
-```bash
-python generate_dummy_data.py
-```
+Before running on your own data, do a test run on the provided dummy data to ensure your environment is set up correctly and the pipeline executes as expected. The configuration file for this test `config/config_dummy.yml` is already pre-configured for the dummy dataset.
 
 Run the pipeline:
-The configuration file for this test `config/config_dummy.yml` is already pre-configured for the dummy dataset. You can launch the test run using the provided bash script (make sure to set the number of CPUs in this script based on your system):
 ```bash
 bash run_dummy.sh
 ```
 
-### Phase 2: Running on your own data
+### Running on your own data
 
 Once you have confirmed that the dummy run works successfully, you can try using your own data. 
 
@@ -84,7 +57,7 @@ Each row in this file corresponds to one input sample. Please maintain the exact
 5. **Raw SBRef Volume:** Path to the raw single-band reference volume (if unavailable, use the functional data averaged across time).
 6. **T1-Weighted Anatomical Image:** Path to the anatomical image (use the `orig.mgz` file generated from `recon-all`).
 7. **Anatomical Segmentation Volume:** Path to the segmentation volume (use the `aseg.mgz` file generated from `recon-all`).
-8. **Registration File:** Path to output FreeSurfer registration file.
+8. **Registration File:** Path to pregenerated output FreeSurfer registration file.
 
 Configure your parameters. 
 Use `config/config_base.yml` as your starting point (do not use `config_dummy.yml` for real data). 
