@@ -12,13 +12,13 @@ This framework is based on our prior work. If you use this pipeline, please cite
 * **Operating System:** A Linux environment is required to run this pipeline.
 * **Python:** Version `3.10.14` is required.
 * **Hardware:** The pipeline speed scales with number of available CPUs. At least 1 GPU is recommended for neural network training stages.
-* **Software:** This pipeline relies on FreeSurfer (7.3.2+) or a FreeSurfer Apptainer/Singularity container for SynthSeg segmentation.
+* **Software:** This pipeline depends on Synthseg from FreeSurfer (7.3.2+).
 
 ## GETTING STARTED
 
 ### Setup and Installation
 
-We recommend using a virtual environment to manage dependencies:
+Set up a virtual environment to manage dependencies:
 ```bash
 # Create and activate environment
 python3.10 -m venv .venv
@@ -30,8 +30,16 @@ cd tofinv
 pip install .
 ```
 
-NOTE: If your system has Freesurfer 7.3.2+, then ensure the module is loaded when running the pipeline. If you want to use an Apptainer/Singularity container instead, change the fs_container and bind_container config parameters from null to the corresponding paths.
+NOTE: If your system has Freesurfer 7.3.2+, then ensure the module is loaded when running the pipeline. If you want to use an Apptainer/Singularity container instead, change the `fs_container` and `bind_container` parameters in the config from `null` to the corresponding paths.
 
+### Updating
+If you have already installed the pipeline and want to update to the latest version (including updates to external dependencies like tofmodel and autocsfmask), follow these steps:
+
+```bash
+cd tofinv
+git pull
+pip install --upgrade .
+```
 
 ### Test run with dummy data
 
@@ -71,8 +79,34 @@ Make a copy of `config_base.yml` and name it however you want. Ensure you update
 Execute the pipeline: 
 Run Snakemake pointing to your newly updated configuration file. You can use the `run_dummy.sh` as a template for this.
 
-### TODO
-Add a section about running the pipeline on a computing cluster (i.e. SLURM)
+### Running in SLURM mode
+
+If you are on a SLURM cluster, see the example script below for running the pipeline in slurm mode. This script launches a master job which then orchestrates requesting jobs for pipeline steps. This master job does not need many resources; just ensure it has plently of time. The actual resources used in slurm mode are currently hardcoded for each rule in the Snakefile so modify them there. 
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=snakemaster
+#SBATCH --output=logs/master_%j.out
+#SBATCH --error=logs/master_%j.err
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=4G
+#SBATCH --time=06:00:00
+#SBATCH --partition=PARTION_NAME
+
+source path/to/pythonenv/.venv/bin/activate
+
+cd path/to/tofinv
+
+CONFIG=config/config_base.yml
+
+snakemake --configfile $CONFIG --unlock
+
+snakemake --slurm --configfile $CONFIG --jobs 100 --latency-wait 30 --restart-times 2 --printshellcmds --rerun-incomplete --keep-going --group-components sampling=10 simulation=5
+
+
+```
+
 
 
 ### CONTACT & SUPPORT
