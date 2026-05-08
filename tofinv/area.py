@@ -9,10 +9,18 @@ from pathlib import Path
 from scipy.ndimage import center_of_mass
 import argparse
 import pickle
+import logging
+
+# --- Logging Configuration ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 def add_boundary(A, depthfromslc1):
-    # adds a wide area at each end of the vector to mimic the 
-    # large CSF spaces above/below the 4th ventricle
+    logger.info("Applying artificial ramp boundaries to area vector to mimic CSF spaces around the 4th ventricle.")
     clip_min = 20
     area_clipped = np.clip(A, clip_min, None)
 
@@ -33,21 +41,26 @@ def add_boundary(A, depthfromslc1):
 def create_slice_montage(anat_slices, mask_slices, aseg_slices, depth_values, output_path):
     active_indices = [i for i in range(len(depth_values)) 
                       if np.any(mask_slices[..., i] > 0) or np.any(aseg_slices[..., i] == 15)]
+    
     if not active_indices:
-        print("[-] No active slices found for the 4th ventricle. Skipping montage.")
+        logger.warning(f"No active slices found for the 4th ventricle. Skipping montage: {output_path}")
         return
+
+    logger.info(f"Generating slice montage with {len(active_indices)} active slices.")
     start_idx = max(0, active_indices[0] - 1)
     end_idx = min(len(depth_values) - 1, active_indices[-1] + 1)
     plot_indices = list(range(start_idx, end_idx + 1))
     num_slices = len(plot_indices)
     cols = 5
     rows = int(np.ceil(num_slices / cols))
+    
     fig, axes = plt.subplots(rows, cols, figsize=(cols * 4, rows * 4))
     axes = np.atleast_1d(axes).flatten()
     BRIGHT_RED = '#FF0000'
     BRIGHT_LIME = '#00FF00'
     bright_red_cmap = ListedColormap([BRIGHT_RED])
     overlay_alpha = 0.7 
+    
     plot_pos = 0
     for plot_pos, i in enumerate(plot_indices):
         ax = axes[plot_pos]
@@ -61,8 +74,10 @@ def create_slice_montage(anat_slices, mask_slices, aseg_slices, depth_values, ou
             ax.imshow(masked_data.T, cmap=bright_red_cmap, alpha=overlay_alpha, origin='lower', interpolation='none')
         ax.set_title(f"Z: {depth_values[i]:.2f}cm", fontsize=10, color='white', backgroundcolor='black')
         ax.axis('off')
+    
     for j in range(plot_pos + 1, len(axes)):
         fig.delaxes(axes[j])
+        
     legend_elements = [
         Line2D([0], [0], color=BRIGHT_LIME, lw=2, label='Aseg Label (15) Target'),
         mpatches.Patch(color=BRIGHT_RED, alpha=overlay_alpha, label='Voxels Included in Sum')
@@ -72,14 +87,23 @@ def create_slice_montage(anat_slices, mask_slices, aseg_slices, depth_values, ou
     legend.get_frame().set_edgecolor('none')
     for text in legend.get_texts():
         text.set_color('white')
+    
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.savefig(output_path, dpi=200, bbox_inches='tight', facecolor='black')
     plt.close()
+    logger.info(f"Successfully saved montage to {output_path}")
     
 def compute_area(func_path, anat_path, aseg_path, reg_path, output_path, func_vox=2.5, anat_vox=1.0):
-    func_img, anat_img, aseg_img = nib.load(func_path), nib.load(anat_path), nib.load(aseg_path)
-    func_data, anat_data, aseg_data = func_img.get_fdata(), anat_img.get_fdata(), aseg_img.get_fdata()
+    logger.info(f"Starting area computation for {func_path}")
     
+    try:
+        func_img, anat_img, aseg_img = nib.load(func_path), nib.load(anat_path), nib.load(aseg_path)
+        func_data, anat_data, aseg_data = func_img.get_fdata(), anat_img.get_fdata(), aseg_img.get_fdata()
+        logger.info(f"NIfTI volumes loaded. Func shape: {func_data.shape}, Anat shape: {anat_data.shape}")
+    except Exception as e:
+        logger.error(f"Failed to load NIfTI files: {e}")
+        raise
+
     # Parameterized Affine Matrices
     anat_half = anat_vox / 2.0
     func_half = func_vox / 2.0
@@ -98,14 +122,22 @@ def compute_area(func_path, anat_path, aseg_path, reg_path, output_path, func_vo
         [0, 0, 0, 1]
     ])
     
+    logger.info(f"Reading registration matrix from {reg_path}")
     R = np.loadtxt(reg_path, skiprows=4, max_rows=4) 
 
-    aseg_data[aseg_data != 15] = 0
+    # Filter for 4th ventricle (Label 15)
+    mask_15 = (aseg_data == 15)
+    if not np.any(mask_15):
+        logger.error("Label 15 (4th ventricle) not found in aseg volume!")
+        raise ValueError("Empty aseg label 15")
+    
+    aseg_data[~mask_15] = 0
     centroid_3d = center_of_mass(aseg_data)
+    logger.info(f"Calculated 4th ventricle centroid in anat CRS: {centroid_3d}")
+
     init_funcCRS = np.linalg.inv(funcVOX2RAS) @ R @ anatVOX2RAS @ np.array([*centroid_3d, 1]).T
     funcCRS0 = np.array([int(np.floor(init_funcCRS[0])), int(np.floor(init_funcCRS[1])), 0, 1])
 
-    # Parameterized dimensions for area computation
     incr = 0.2
     lenx = leny = func_vox
     voxel_area = (incr * lenx) * (incr * leny)
@@ -113,28 +145,36 @@ def compute_area(func_path, anat_path, aseg_path, reg_path, output_path, func_vo
     deltax = deltay = np.arange(-8, 8 + incr, incr)
     deltaz = np.arange(-25, 25 + incr, incr)
     
+    logger.info(f"Starting grid search. Grid size: {deltax.size}x{deltay.size}x{deltaz.size}")
+    
     area_contribution = np.zeros((deltax.size, deltay.size, deltaz.size))
     T1 = np.zeros((deltax.size, deltay.size, deltaz.size))
-
     viz_anat = np.zeros((deltax.size, deltay.size, deltaz.size))
     viz_aseg = np.zeros((deltax.size, deltay.size, deltaz.size))
 
     # Grid search
+    inv_anat = np.linalg.inv(anatVOX2RAS)
+    inv_R = np.linalg.inv(R)
+    
     for xind, dx in enumerate(deltax):
         for yind, dy in enumerate(deltay):
             for zind, dz in enumerate(deltaz):
                 ifuncCRS = funcCRS0 + np.array([dx, dy, dz, 0])
-                anat_crs = np.linalg.inv(anatVOX2RAS) @ np.linalg.inv(R) @ funcVOX2RAS @ ifuncCRS
+                anat_crs = inv_anat @ inv_R @ funcVOX2RAS @ ifuncCRS
                 crs_int = np.floor(anat_crs[:3]).astype(int)
+                
                 if np.all((crs_int >= 0) & (crs_int < aseg_data.shape)):
+                    val_aseg = aseg_data[crs_int[0], crs_int[1], crs_int[2]]
+                    val_anat = anat_data[crs_int[0], crs_int[1], crs_int[2]]
                     
-                    viz_anat[xind, yind, zind] = anat_data[crs_int[0], crs_int[1], crs_int[2]]
-                    viz_aseg[xind, yind, zind] = aseg_data[crs_int[0], crs_int[1], crs_int[2]]
+                    viz_anat[xind, yind, zind] = val_anat
+                    viz_aseg[xind, yind, zind] = val_aseg
                     
-                    if aseg_data[crs_int[0], crs_int[1], crs_int[2]] == 15:
+                    if val_aseg == 15:
                         area_contribution[xind, yind, zind] = voxel_area
-                        T1[xind, yind, zind] = anat_data[crs_int[0], crs_int[1], crs_int[2]]
+                        T1[xind, yind, zind] = val_anat
 
+    logger.info("Grid search complete. Calculating area profile.")
     A = np.zeros(len(deltaz))
     for i in range(len(deltaz)):
         Aslice, T1slice = area_contribution[:,:,i], T1[:,:,i].copy()
@@ -148,13 +188,13 @@ def compute_area(func_path, anat_path, aseg_path, reg_path, output_path, func_vo
     depthfromslc1 = deltaz * func_vox 
     A = add_boundary(A, depthfromslc1)
     
-    # Save results (converting to cm/cm2)
     depth_cm = depthfromslc1 * 0.1
     A_cm2 = A * 0.01
     
     out_dir = Path(output_path)
     out_dir.mkdir(parents=True, exist_ok=True)
     np.savetxt(out_dir / "area.txt", np.column_stack([depth_cm, A_cm2]), fmt="%.6f")
+    logger.info(f"Saved area.txt to {out_dir}")
 
     # Plot
     plt.figure()
@@ -164,8 +204,8 @@ def compute_area(func_path, anat_path, aseg_path, reg_path, output_path, func_vo
     plt.title("4th ventricle area-depth profile")
     plt.savefig(out_dir / "area_vs_depth.png")
     plt.close()
+    logger.info("Saved area_vs_depth.png")
 
-    out_dir = Path(output_path)
     create_slice_montage(
         viz_anat, 
         area_contribution, 
@@ -175,9 +215,11 @@ def compute_area(func_path, anat_path, aseg_path, reg_path, output_path, func_vo
     )
 
 def aggregate_area(search_dir, outfile):
+    logger.info(f"Searching for area.txt files in {search_dir}")
     search_path = Path(search_dir)
     area_files = sorted(list(search_path.rglob("area.txt")))
     
+    logger.info(f"Found {len(area_files)} files to aggregate.")
     collection = []
 
     for f in area_files:
@@ -188,32 +230,27 @@ def aggregate_area(search_dir, outfile):
             ses = parts[area_idx - 1]
             data = np.loadtxt(f) 
             collection.append((data[:, 0], data[:, 1], sub))
+            logger.info(f"Collected: {sub} | {ses}")
 
         except (ValueError, IndexError) as e:
-            print(f"Skipping malformed path: {f}")
+            logger.warning(f"Skipping problematic path: {f}")
 
     with open(outfile, "wb") as f_out:
         pickle.dump(collection, f_out)
     
-    print(f"[+] Aggregated {len(collection)} area records to {outfile}")
+    logger.info(f"[+] Successfully aggregated {len(collection)} area records to {outfile}")
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--collect', action='store_true', help="Aggregate existing area files")
-    
-    # Standard processing args
     parser.add_argument('--func', type=str)
     parser.add_argument('--anat', type=str)
     parser.add_argument('--aseg', type=str)
     parser.add_argument('--reg', type=str)
-    
-    # Voxel Parameters
-    parser.add_argument('--func_vox', type=float, default=2.5, help="Isotropic functional voxel size (mm)")
-    parser.add_argument('--anat_vox', type=float, default=1.0, help="Isotropic anatomical voxel size (mm)")
-
-    # Shared/Collection args
-    parser.add_argument('--outdir', type=str, help="Output dir for compute, or Search dir for collect")
-    parser.add_argument('--outfile', type=str, help="Path for the final pickle (use with --collect)")
+    parser.add_argument('--func_vox', type=float, default=2.5)
+    parser.add_argument('--anat_vox', type=float, default=1.0)
+    parser.add_argument('--outdir', type=str)
+    parser.add_argument('--outfile', type=str)
     
     args = parser.parse_args()
 

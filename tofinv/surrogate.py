@@ -1,6 +1,8 @@
 import os
 import argparse
 import pickle
+import logging
+import sys
 import numpy as np
 import torch
 import torch.nn as nn
@@ -11,6 +13,15 @@ from pathlib import Path
 
 from tofinv.utils import scale_data 
 
+# --- Logging Configuration ---
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    stream=sys.stdout
+)
+logger = logging.getLogger(__name__)
+
 def rfft_freqs_and_spectrum(x, tr):
     N = len(x)
     freqs = np.fft.rfftfreq(N, d=tr)
@@ -18,11 +29,16 @@ def rfft_freqs_and_spectrum(x, tr):
     return freqs, spectrum
 
 def scale_area(xarea, area):
+    """Normalize area based on the center of the segment."""
     middle_index = xarea.shape[0] // 2
     area_scaled = area / (area[middle_index] + 1e-6)
     return area_scaled
 
 class SurrogateConv1D(nn.Module):
+    """
+    CNN architecture to map [Velocity, Area] -> [TOF Signals].
+    Uses 1D Convolutions with GELU activation and Batch Normalization.
+    """
     def __init__(self, in_channels, out_channels, hidden_dim=64):
         super().__init__()
         self.network = nn.Sequential(
@@ -44,68 +60,69 @@ class SurrogateConv1D(nn.Module):
 def main():
     parser = argparse.ArgumentParser(description="Train Surrogate Model")
     parser.add_argument("--dataset", required=True, help="Path to dataset.pkl")
-    parser.add_argument("--out_weights", required=True, help="Path to save surrogate model weights")
-    parser.add_argument("--outdir", required=True, help="Directory to save plots")
+    parser.add_argument("--out_weights", required=True, help="Path to save weights")
+    parser.add_argument("--outdir", required=True, help="Directory for plots")
     parser.add_argument("--batch_size", type=int, default=128)
-    parser.add_argument("--epochs", type=int, default=2000)
+    parser.add_argument("--epochs", type=int, default=1000)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--tr", type=float, default=0.378)
     parser.add_argument("--nslice_to_use", type=int, default=3)
     args = parser.parse_args()
 
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {DEVICE}")
+    logger.info(f"Using device: {DEVICE}")
 
     plots_dir = Path(args.outdir)
     plots_dir.mkdir(parents=True, exist_ok=True)
 
-    print("Loading dataset...")
+    # 1. Data Preparation
+    logger.info(f"Loading dataset: {args.dataset}")
     with open(args.dataset, "rb") as f:
         X_data, y_data = pickle.load(f)
 
-    print("Scaling signal and area data...")
+    logger.info(f"Processing and scaling {X_data.shape[0]} samples...")
     pos_idx = args.nslice_to_use
     area_idx = args.nslice_to_use + 1
 
     for i in range(X_data.shape[0]):
-        # Scale flow
+        # Scale flow signals (targets)
         to_scale = X_data[i, :args.nslice_to_use, :].T  
-        scaled = scale_data(to_scale).T            
-        X_data[i, :args.nslice_to_use, :] = scaled      
+        X_data[i, :args.nslice_to_use, :] = scale_data(to_scale).T 
         
-        # Scale area
+        # Scale area profile (input)
         xarea_single = X_data[i, pos_idx, :]
         area_single = X_data[i, area_idx, :]
         X_data[i, area_idx, :] = scale_area(xarea_single, area_single)
 
     X_tensor = torch.tensor(X_data, dtype=torch.float32)
-    y_tensor = torch.tensor(y_data, dtype=torch.float32)
+    y_tensor = torch.tensor(y_data, dtype=torch.float32) # Base velocities
 
+    # Cat Inputs: Velocity + Scaled Area profile
     V = y_tensor  
-    
-    # Extract only the scaled Area [Batch, 1, 300]
     A = X_tensor[:, area_idx : area_idx + 1, :]  
-    
-    # Inputs: 1 Vel + 1 Area = 2 channels
     surrogate_inputs = torch.cat([V, A], dim=1) 
     surrogate_targets = X_tensor[:, :args.nslice_to_use, :] 
 
+    # Split Dataset
     dataset = TensorDataset(surrogate_inputs, surrogate_targets)
-    train_size = int(0.8 * len(dataset))
+    train_size = int(0.85 * len(dataset))
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
 
-    in_channels = surrogate_inputs.shape[1] # Should be 2
+    # 2. Model Initialization
+    in_channels = surrogate_inputs.shape[1] 
     out_channels = surrogate_targets.shape[1]
-
     model = SurrogateConv1D(in_channels, out_channels).to(DEVICE)
+    
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=50, factor=0.5)
 
-    print("Starting training...")
+    # 3. Training Loop
+    logger.info("Starting training loop...")
     train_losses, val_losses = [], []
 
     for epoch in range(args.epochs):
@@ -134,93 +151,76 @@ def main():
         train_losses.append(avg_train_loss)
         val_losses.append(avg_val_loss)
         
-        if (epoch + 1) % 5 == 0 or epoch == 0:
-            print(f"Epoch [{epoch+1}/{args.epochs}] | Train Loss: {avg_train_loss:.6f} | Val Loss: {avg_val_loss:.6f}")
+        scheduler.step(avg_val_loss)
+        
+        if (epoch + 1) % 50 == 0 or epoch == 0:
+            logger.info(f"Epoch {epoch+1:04d} | Train MSE: {avg_train_loss:.7f} | Val MSE: {avg_val_loss:.7f}")
 
-    print("Training complete! Saving model weights...")
+    # 4. Save and Evaluate
+    logger.info(f"Saving model to {args.out_weights}")
     torch.save(model.state_dict(), args.out_weights)
 
+    # Pick a random sample for visual validation
     model.eval()
     with torch.no_grad():
         idx = np.random.randint(len(val_dataset))
         sample_input, true_target = val_dataset[idx]
-        sample_input_batch = sample_input.unsqueeze(0).to(DEVICE)
-        pred_target = model(sample_input_batch).squeeze(0).cpu()
+        pred_target = model(sample_input.unsqueeze(0).to(DEVICE)).squeeze(0).cpu()
 
-    # Input 0 is Velocity
-    v_input = sample_input[0, :].numpy()  
-    s_target = true_target.T.numpy()     
-    ssim_opt_plot = pred_target.T.numpy() 
-    nslice = s_target.shape[1]
-
-    fig, axes = plt.subplots(2, 3, figsize=(12, 8))
-    freqs, m_v = rfft_freqs_and_spectrum(v_input, tr=args.tr)
-    axes[0, 0].plot(freqs[1:], m_v[1:], color='gray')
-    axes[0, 0].set_title('Velocity PSD')
-    axes[0, 0].set_ylabel('Magnitude')
-
-    for ch in range(nslice):
+    # Diagnostic Plots
+    logger.info("Generating diagnostic plots...")
+    v_input = sample_input[0, :].numpy() 
+    s_target = true_target.T.numpy() 
+    s_pred = pred_target.T.numpy()
+    
+    fig, axes = plt.subplots(2, 3, figsize=(14, 9))
+    
+    # Frequency Domain (PSD)
+    f_v, m_v = rfft_freqs_and_spectrum(v_input, tr=args.tr)
+    axes[0, 0].plot(f_v[1:], m_v[1:], color='black', lw=1.5)
+    axes[0, 0].set_title('Input Velocity PSD')
+    
+    for ch in range(out_channels):
         f, m = rfft_freqs_and_spectrum(s_target[:, ch], tr=args.tr)
-        axes[0, 1].plot(f[1:], m[1:], alpha=0.7)
-    axes[0, 1].set_title('Measured Signal PSD')
+        axes[0, 1].plot(f[1:], m[1:], alpha=0.6, label=f'Ch{ch}')
+        f_p, m_p = rfft_freqs_and_spectrum(s_pred[:, ch], tr=args.tr)
+        axes[0, 2].plot(f_p[1:], m_p[1:], alpha=0.6)
 
-    for ch in range(nslice):
-        f, m = rfft_freqs_and_spectrum(ssim_opt_plot[:, ch], tr=args.tr)
-        axes[0, 2].plot(f[1:], m[1:], alpha=0.7)
-    axes[0, 2].set_title('Predicted Signal PSD')
+    axes[0, 1].set_title('Physics-Model PSD (Ground Truth)')
+    axes[0, 2].set_title('Surrogate PSD (Prediction)')
 
-    axes[1, 0].plot(v_input, color='gray')
-    axes[1, 0].set_title('Input Velocity ($V$)')
-    axes[1, 0].set_ylabel('Amplitude')
+    # Time Domain
+    axes[1, 0].plot(v_input, color='black', lw=1.5)
+    axes[1, 0].set_title('Input Velocity Profile')
+    
+    for ch in range(out_channels):
+        axes[1, 1].plot(s_target[:, ch], alpha=0.6)
+        axes[1, 2].plot(s_pred[:, ch], alpha=0.6)
 
-    for ch in range(nslice):
-        axes[1, 1].plot(s_target[:, ch], alpha=0.7)
-    axes[1, 1].set_title('Measured Signal ($S_{true}$)')
+    axes[1, 1].set_title('Physics-Model Signal')
+    axes[1, 2].set_title('Surrogate Prediction')
 
-    for ch in range(nslice):
-        axes[1, 2].plot(ssim_opt_plot[:, ch], alpha=0.7)
-    axes[1, 2].set_title('Surrogate Predicted ($S_{pred}$)')
-
-    for i in range(3):
-        axes[0, i].set_xlabel('Freq (Hz)')
-        axes[1, i].set_xlabel('Frames')
-
-    for row in range(2):
-        ax_measured = axes[row, 1]
-        ax_predicted = axes[row, 2]
-        y_min = min(ax_measured.get_ylim()[0], ax_predicted.get_ylim()[0])
-        y_max = max(ax_measured.get_ylim()[1], ax_predicted.get_ylim()[1])
-        ax_measured.set_ylim(y_min, y_max)
-        ax_predicted.set_ylim(y_min, y_max)
-        ax_predicted.tick_params(labelleft=False)
+    for ax in axes.flatten(): 
+        ax.grid(alpha=0.3)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
 
     plt.tight_layout()
-    fig.savefig(plots_dir / f'Surrogate_Combined_sample{idx}.png')
-    plt.close(fig)
-
-    fig_loss, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-    ax1.plot(train_losses, label='Train Loss', color='royalblue', alpha=0.8)
-    ax1.plot(val_losses, label='Val Loss', color='darkorange', linestyle='--', alpha=0.8)
-    ax1.set_yscale('log')
-    ax1.set_title('Optimization History (Log Scale)')
-    ax1.set_xlabel('Epochs')
-    ax1.set_ylabel('Mean Squared Error')
-    ax1.grid(True, which="both", ls="-", alpha=0.2)
-    ax1.legend()
-
-    last_pct = int(args.epochs * 0.2)
-    epochs_range = range(args.epochs - last_pct, args.epochs)
-    ax2.plot(epochs_range, train_losses[-last_pct:], color='royalblue', label='Train')
-    ax2.plot(epochs_range, val_losses[-last_pct:], color='darkorange', linestyle='--', label='Val')
-    ax2.set_title(f'Final Convergence (Last {last_pct} Epochs)')
-    ax2.set_xlabel('Epochs')
-    ax2.grid(True, alpha=0.2)
-    ax2.legend()
-
-    plt.tight_layout()
-    fig_loss.savefig(plots_dir / 'loss_curves.png')
-    plt.close(fig_loss)
+    fig.savefig(plots_dir / f'Surrogate_Validation_sample{idx}.png', dpi=150)
+    
+    # Loss Curve Plot
+    plt.figure(figsize=(8, 5))
+    plt.plot(train_losses, label='Train MSE')
+    plt.plot(val_losses, label='Val MSE', alpha=0.7)
+    plt.yscale('log')
+    plt.title('Surrogate Model Learning History')
+    plt.xlabel('Epochs')
+    plt.ylabel('MSE Loss')
+    plt.legend()
+    plt.grid(True, which='both', alpha=0.2)
+    plt.savefig(plots_dir / 'training_history.png')
+    
+    logger.info("Training and validation summary complete.")
 
 if __name__ == "__main__":
     main()
-    

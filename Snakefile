@@ -5,6 +5,7 @@ from pathlib import Path
 
 # --- Globals & Paths ---
 OUTDIR = config["paths"]["output_dir"]
+LOGDIR = f"{OUTDIR}/logs"
 
 # Decoupled Sub-directories
 PREPDIR  = f"{OUTDIR}/1_preprocessing"
@@ -100,6 +101,8 @@ rule automask:
         signal = f"{PREPDIR}/{{sub}}/{{ses}}/{{run}}/automask/signal.txt",
         fixed_sbref = f"{PREPDIR}/{{sub}}/{{ses}}/{{run}}/automask/SBRef_fixed.nii.gz",
         synthseg = f"{PREPDIR}/{{sub}}/{{ses}}/{{run}}/automask/SBRef_fixed_synthseg.nii.gz"
+    log:
+        f"{LOGDIR}/automask/{{sub}}_{{ses}}_{{run}}.log"
     params:
         outdir = f"{PREPDIR}/{{sub}}/{{ses}}/{{run}}/automask",
         fs_container = config["paths"]["fs_container"],
@@ -112,7 +115,7 @@ rule automask:
     shell:
         "python -m tofinv.masking --func {input.func} --sbref {input.sbref} "
         "--nslice_to_keep {params.nslice} --outdir {params.outdir} "
-        "--container {params.fs_container} --container_bind {params.bind_container} {params.dummy_flag}"
+        "--container {params.fs_container} --container_bind {params.bind_container} {params.dummy_flag} > {log} 2>&1"
 
 rule noise:
     input:
@@ -120,7 +123,9 @@ rule noise:
         synthseg = rules.automask.output.synthseg,
         fixed_sbref = rules.automask.output.fixed_sbref
     output:
-        noise_file = f"{PREPDIR}/{{sub}}/{{ses}}/{{run}}/noise/noise.txt",
+        noise_file = f"{PREPDIR}/{{sub}}/{{ses}}/{{run}}/noise/noise.txt"
+    log:
+        f"{LOGDIR}/noise/{{sub}}_{{ses}}_{{run}}.log"
     params:
         outdir = f"{PREPDIR}/{{sub}}/{{ses}}/{{run}}/noise"
     resources:
@@ -128,13 +133,15 @@ rule noise:
         slurm_partition = "mit_preemptable"
     shell:
         "python -m tofinv.noise --func {input.func} --synthseg {input.synthseg} "
-        "--sbref {input.fixed_sbref} --outdir {params.outdir}"
+        "--sbref {input.fixed_sbref} --outdir {params.outdir} > {log} 2>&1"
 
 rule area:
     input: unpack(get_area_inputs)
     output:
         area_file = f"{PREPDIR}/{{sub}}/{{ses}}/area/area.txt",
         area_dir = directory(f"{PREPDIR}/{{sub}}/{{ses}}/area")
+    log:
+        f"{LOGDIR}/area/{{sub}}_{{ses}}.log"
     params:
         func_vox_mm = config["scan_param"]["slice_width"]*10
     resources:
@@ -142,7 +149,7 @@ rule area:
         slurm_partition = "mit_normal"
     shell:
         "python -m tofinv.area --func {input.func} --anat {input.anat} "
-        "--aseg {input.aseg} --reg {input.reg} --outdir {output.area_dir} --func_vox {params.func_vox_mm}"
+        "--aseg {input.aseg} --reg {input.reg} --outdir {output.area_dir} --func_vox {params.func_vox_mm} > {log} 2>&1"
 
 rule optim:
     input:
@@ -151,6 +158,8 @@ rule optim:
         config = CONFIG_YML
     output:
         done = touch(f"{PREPDIR}/{{sub}}/{{ses}}/{{run}}/optim/.optim_done")
+    log:
+        f"{LOGDIR}/optim/{{sub}}_{{ses}}_{{run}}.log"
     params:
         outdir = f"{PREPDIR}/{{sub}}/{{ses}}/{{run}}/optim"
     threads: config["resources"]["threads_low"]
@@ -159,7 +168,7 @@ rule optim:
         slurm_partition = "mit_preemptable"
     shell:
         "python -m tofinv.optim --signal {input.signal} --area {input.area} "
-        "--config {input.config} --outdir {params.outdir}"
+        "--config {input.config} --outdir {params.outdir} > {log} 2>&1"
 
 # ---------------------------------------------------------
 # STAGE 2: AGGREGATED DATA
@@ -169,6 +178,8 @@ rule aggregate_noise:
         files = expand(f"{PREPDIR}/{{sub}}/{{ses}}/{{run}}/noise/noise.txt", zip, sub=manifest['sub'], ses=manifest['ses'], run=manifest['run'])
     output:
         noise_data = f"{DATADIR}/noise_data.pkl"
+    log:
+        f"{LOGDIR}/aggregate_noise.log"
     params:
         length = config["scan_param"]["num_pulse"],
         search_dir = PREPDIR
@@ -177,19 +188,21 @@ rule aggregate_noise:
         slurm_partition = "mit_preemptable"
     shell:
         "python -m tofinv.noise --collect --outdir {params.search_dir} "
-        "--outfile {output.noise_data} --desired_sample_length {params.length}"
+        "--outfile {output.noise_data} --desired_sample_length {params.length} > {log} 2>&1"
 
 rule aggregate_area:
     input:
         areas = expand(f"{PREPDIR}/{{sub}}/{{ses}}/area/area.txt", zip, sub=UNIQUE_SUB_SES['sub'], ses=UNIQUE_SUB_SES['ses'])
     output:
         area_collection = f"{DATADIR}/area_collection.pkl"
+    log:
+        f"{LOGDIR}/aggregate_area.log"
     params:
         search_dir = PREPDIR
     resources:
         runtime = 15, mem_mb = 4000, slurm_partition = "mit_normal"
     shell:
-        "python -m tofinv.area --collect --outdir {params.search_dir} --outfile {output.area_collection}"
+        "python -m tofinv.area --collect --outdir {params.search_dir} --outfile {output.area_collection}  > {log} 2>&1"
 
 # def get_successful_optim_runs(wildcards):
 #     all_paths = expand(
@@ -208,12 +221,14 @@ rule aggregate_optim:
         # optims = get_successful_optim_runs
     output:
         optimized_velocity = f"{DATADIR}/crude_optim_velocity_amps.pkl"
+    log:
+        f"{LOGDIR}/aggregate_optim.log"
     params:
         search_dir = PREPDIR
     resources:
         runtime = 120, nodes = 1, cpus_per_task = 20, mem_mb = 64000, slurm_partition = "mit_normal"
     shell:
-        "python -m tofinv.optim --collect --outdir {params.search_dir} --outfile {output.optimized_velocity}"
+        "python -m tofinv.optim --collect --outdir {params.search_dir} --outfile {output.optimized_velocity} > {log} 2>&1"
 
 # ---------------------------------------------------------
 # STAGE 3: SYNTHETIC DATA
@@ -225,19 +240,23 @@ rule synthdata_sampling:
         config = CONFIG_YML
     output: 
         pkl = f"{SYNTHDIR}/inputs_batched/task{{batch}}.pkl"
+    log:
+        f"{LOGDIR}/synthdata_sampling/task{{batch}}.log"
     group: "sampling"
     threads: config["resources"]["threads_high"]
     resources:
         runtime = 120, nodes = 1, cpus_per_task = 1, mem_mb = 8000, slurm_partition = "mit_preemptable"
     shell:
         "python -m tofinv.synthdata.sampling --config {input.config} --taskid {wildcards.batch} "
-        "--optim_path {input.voptim} --area_path {input.area_collection} --output {output.pkl}"
+        "--optim_path {input.voptim} --area_path {input.area_collection} --output {output.pkl} > {log} 2>&1"
 
 rule synthdata_sort:
     input:
         batches = expand(f"{SYNTHDIR}/inputs_batched/task{{batch}}.pkl", batch=range(1, config["synthetic"]['num_batches'] + 1))
     output:
         sort_done = temp(touch(f"{SYNTHDIR}/inputs_batched_sorted/.sort_done"))
+    log:
+        f"{LOGDIR}/synthdata_sort.log"
     params:
         outdir = f"{SYNTHDIR}/inputs_batched_sorted",
         batch_size = config["synthetic"]["num_samples"] // config["synthetic"]['num_batches']
@@ -245,13 +264,15 @@ rule synthdata_sort:
         runtime = 60, nodes = 1, cpus_per_task = 1, mem_mb = 32000, slurm_partition = "mit_normal",
     shell:
         "python -m tofinv.synthdata.processing sort --input_dir {SYNTHDIR}/inputs_batched "
-        "--output_dir {params.outdir} --batch_size {params.batch_size}"
+        "--output_dir {params.outdir} --batch_size {params.batch_size} > {log} 2>&1"
 
 rule synthdata_simulate:
     input: 
         sort_done = rules.synthdata_sort.output.sort_done
     output: 
         batch_done = touch(f"{SYNTHDIR}/simulations_batched/batch_{{batch}}/.sim_done")
+    log:
+        f"{LOGDIR}/synthdata_simulate/task{{batch}}.log"
     params:
         input_dir = f"{SYNTHDIR}/inputs_batched_sorted",
         output_dir = f"{SYNTHDIR}/simulations_batched/batch_{{batch}}"
@@ -261,18 +282,20 @@ rule synthdata_simulate:
         runtime = 240, nodes = 1, cpus_per_task = 5, mem_mb = 16000, slurm_partition = "mit_preemptable"
     shell:
         "python -m tofinv.synthdata.simulation --input_dir {params.input_dir} "
-        "--task_id {wildcards.batch} --output_dir {params.output_dir}"
+        "--task_id {wildcards.batch} --output_dir {params.output_dir} > {log} 2>&1"
 
 rule synthdata_combine:
     input:
         dones = expand(f"{SYNTHDIR}/simulations_batched/batch_{{batch}}/.sim_done", batch=range(1, config["synthetic"]['num_batches'] + 1))
     output:
         final_pkl = f"{SYNTHDIR}/dataset.pkl"
+    log:
+        f"{LOGDIR}/synthdata_combine.log"
     threads: config["resources"]["threads_high"]
     resources:
         runtime = 240, nodes = 1, cpus_per_task = 64, mem_mb = 100000, slurm_partition = "mit_normal"
     shell:
-        "python -m tofinv.synthdata.processing combine --sim_dir {SYNTHDIR}/simulations_batched --output_dir {SYNTHDIR}"
+        "python -m tofinv.synthdata.processing combine --sim_dir {SYNTHDIR}/simulations_batched --output_dir {SYNTHDIR} > {log} 2>&1"
 
 # ---------------------------------------------------------
 # STAGE 4: EXPERIMENTS (Training)
@@ -283,12 +306,14 @@ rule train_surrogate:
     output:
         weights = f"{EXPDIR}/surrogate_model/surrogate_model_weights.pth",
         plot_done = touch(f"{EXPDIR}/surrogate_model/surrogate_plots/.plot_done")
+    log:
+        f"{LOGDIR}/train_surrogate.log"
     params:
         plot_dir = f"{EXPDIR}/surrogate_model/surrogate_plots"
     resources:
         runtime = 360, nodes = 1, cpus_per_task = 4, mem_mb = 64000, slurm_partition = "mit_preemptable", slurm_extra = "--gres=gpu:4"
     shell:
-        "python -m tofinv.surrogate --dataset {input.dataset} --out_weights {output.weights} --outdir {params.plot_dir}"
+        "python -m tofinv.surrogate --dataset {input.dataset} --out_weights {output.weights} --outdir {params.plot_dir} > {log} 2>&1"
 
 rule train_model:
     input:
@@ -297,6 +322,8 @@ rule train_model:
         surrogate = rules.train_surrogate.output.weights
     output:
         model = f"{EXPDIR}/{{exp}}/best_model.pth"
+    log:
+        f"{LOGDIR}/train_model/{{exp}}.log"
     params:
         train_args = get_train_args,
         epochs = config["train"]["train_epochs"],
@@ -316,7 +343,7 @@ rule train_model:
             --surrogate_path {input.surrogate} \
             --outdir {params.outdir} \
             --out_weights {output.model} \
-            {params.train_args}
+            {params.train_args} > {log} 2>&1 
         """
 
 # ---------------------------------------------------------
@@ -330,6 +357,8 @@ rule evaluate:
         config = CONFIG_YML
     output:
         velocity = f"{EVALDIR}/{{exp}}/{{sub}}/{{ses}}/{{run}}/velocity_predicted.txt"
+    log:
+        f"{LOGDIR}/evaluate/{{exp}}_{{sub}}_{{ses}}_{{run}}.log"
     threads: config["resources"]["threads_low"]
     params:
         outdir = f"{EVALDIR}/{{exp}}/{{sub}}/{{ses}}/{{run}}"
@@ -338,4 +367,4 @@ rule evaluate:
     shell:
         "python -m tofinv.evaluation "
         "--signal {input.signal} --area {input.area} --model {input.model} "
-        "--config {input.config} --outdir {params.outdir} --ncpu {threads}"
+        "--config {input.config} --outdir {params.outdir} --ncpu {threads} > {log} 2>&1"
