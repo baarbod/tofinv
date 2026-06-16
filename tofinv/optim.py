@@ -1,5 +1,7 @@
 import argparse
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import pickle
 import logging
@@ -64,6 +66,29 @@ def run_optimization(signal_path, area_path, config_path, outdir):
     logger.info(f"Loading configuration from {config_path}")
     param = OmegaConf.load(config_path)
 
+
+    logger.info(f"Initial alpha_list length: {len(param.scan_param.alpha_list)}")
+    logging.info(param.scan_param.alpha_list)
+    logger.info(OmegaConf.to_yaml(param))        
+
+    raw_alpha = param.scan_param.alpha_list
+
+    if isinstance(raw_alpha, str):
+        logger.warning("Detected alpha_list parsed as string. Cleaning and ensuring positive values...")
+        parts = raw_alpha.replace('--', '-').split()
+        param.scan_param.alpha_list = [abs(float(p)) for p in parts]
+
+    elif isinstance(raw_alpha, (list, getattr(OmegaConf, 'ListConfig', list))):
+        param.scan_param.alpha_list = [
+            abs(float(str(x).replace('--', '-'))) if isinstance(x, str) else abs(float(x))
+            for x in raw_alpha
+        ]
+    
+    logger.info(f"Verified positive alpha_list length: {len(param.scan_param.alpha_list)}")
+    logging.info(param.scan_param.alpha_list)
+    logger.info(OmegaConf.to_yaml(param))
+
+    
     optim_kwargs = OmegaConf.to_container(param.optim, resolve=True)
     optim_kwargs["dimensions"] = [tuple(dim) for dim in optim_kwargs["dimensions"]]    
     
