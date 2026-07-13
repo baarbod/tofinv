@@ -1,3 +1,4 @@
+
 import argparse
 import pathlib
 import subprocess
@@ -6,7 +7,6 @@ import numpy as np
 from scipy import ndimage
 import surfa as sf
 from autocsfmask.automask import run_automask
-
 
 def fix_sbref(infile, outfile):
     img = nib.load(infile)
@@ -27,16 +27,15 @@ def main():
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--container", help="Path to freesurfer container file")
     parser.add_argument("--container_bind", help="Paths to bind for apptainer")
+    parser.add_argument('--global_seed', default=42, type=int, help='seed for reproducibility')
+    parser.add_argument('--csf_label', default=15, type=int, help='freesurfer label for CSF, default is 15')
     parser.add_argument("--dummy_run", action="store_true", help="flag when running with dummy data, which will skip running SynthSeg and use a pre-generated mask instead")
-    
     args = parser.parse_args()
-
+    
     outdir = pathlib.Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-
     sbref_fixed = outdir / "SBRef_fixed.nii.gz"
     fix_sbref(args.sbref, sbref_fixed)
-
     container = args.container
     if args.dummy_run:
         print("[*] Running in dummy mode, skipping SynthSeg and using pre-generated mask.")
@@ -48,7 +47,6 @@ def main():
         use_container = args.container and args.container.lower() != "none"
         if use_container:
             print(f"[*] Running SynthSeg via Container: {args.container}")
-            # Only add bind if it's also not "None"
             if args.container_bind and args.container_bind.lower() != "none":
                 bind_args = ["-B", args.container_bind]
             else:
@@ -57,30 +55,25 @@ def main():
         else:
             print("[*] Running SynthSeg via local FreeSurfer module")
         subprocess.run(cmd, check=True)
-
-    
     synthseg_file = outdir / "SBRef_fixed_synthseg.nii.gz"
     resampled = sf.load_volume(synthseg_file).resample_like(sf.load_volume(sbref_fixed), method='nearest')
-    mask = resampled == 15  # CSF label
-    
-    dilated = ndimage.binary_dilation(mask[:, :, :args.nslice_to_keep+1], structure=ndimage.generate_binary_structure(3, 4), iterations=1)
-    
+    mask = resampled == args.csf_label
+    dilated = ndimage.binary_dilation(mask[:, :, :args.nslice_to_keep+1], structure=ndimage.generate_binary_structure(3, 3), iterations=2)
     for islice in range(args.nslice_to_keep):
         if np.sum(dilated[:, :, islice]) == 0:
             dilated[:, :, islice] = dilated[:, :, islice + 1]
     if np.sum(dilated[:, :, -1]) == 0:
         dilated[:, :, -1] = dilated[:, :, -2]
-        
     mask_path = outdir / "dilated_mask.npy"
     np.save(mask_path, dilated)
-
     print(f"[*] Running automask for {args.func}")
     run_automask(
         func=args.func,
         sbref=str(sbref_fixed),
         boundmask=str(mask_path),
         outdir=str(outdir),
-        metrics_list_names=['skew', 'sbref']
+        metrics_list_names=['sd'],
+        global_seed=global_seed
     )
 
 if __name__ == "__main__":
