@@ -1,4 +1,3 @@
-
 import argparse
 import pathlib
 import subprocess
@@ -29,7 +28,9 @@ def main():
     parser.add_argument("--container_bind", help="Paths to bind for apptainer")
     parser.add_argument('--global_seed', default=42, type=int, help='seed for reproducibility')
     parser.add_argument('--csf_label', default=15, type=int, help='freesurfer label for CSF, default is 15')
-    parser.add_argument("--dummy_run", action="store_true", help="flag when running with dummy data, which will skip running SynthSeg and use a pre-generated mask instead")
+    parser.add_argument("--dummy_run", action="store_true", help="flag when running with dummy data")
+    parser.add_argument("--metrics_list", nargs='+', default=['sd'], help="List of metrics for automask")
+    
     args = parser.parse_args()
     
     outdir = pathlib.Path(args.outdir)
@@ -55,6 +56,7 @@ def main():
         else:
             print("[*] Running SynthSeg via local FreeSurfer module")
         subprocess.run(cmd, check=True)
+        
     synthseg_file = outdir / "SBRef_fixed_synthseg.nii.gz"
     resampled = sf.load_volume(synthseg_file).resample_like(sf.load_volume(sbref_fixed), method='nearest')
     mask = resampled == args.csf_label
@@ -67,13 +69,14 @@ def main():
     mask_path = outdir / "dilated_mask.npy"
     np.save(mask_path, dilated)
     print(f"[*] Running automask for {args.func}")
+    
     run_automask(
         func=args.func,
         sbref=str(sbref_fixed),
         boundmask=str(mask_path),
         outdir=str(outdir),
-        metrics_list_names=['sd'],
-        global_seed=global_seed
+        metrics_list_names=args.metrics_list,
+        global_seed=args.global_seed
     )
 
 if __name__ == "__main__":
