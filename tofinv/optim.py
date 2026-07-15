@@ -1,4 +1,3 @@
-
 import argparse
 import numpy as np
 import matplotlib
@@ -65,9 +64,12 @@ def run_optimization(signal_path, area_path, config_path, outdir):
             abs(float(str(x).replace('--', '-'))) if isinstance(x, str) else abs(float(x))
             for x in raw_alpha
         ]
-    optim_kwargs = OmegaConf.to_container(param.optim, resolve=True)
+    optim_kwargs = OmegaConf.to_container(param.optim_gp_minimize, resolve=True)
     optim_kwargs["dimensions"] = [tuple(dim) for dim in optim_kwargs["dimensions"]]    
     optim_kwargs["random_state"] = param.global_seed
+    min_num_windows = param.optim.get("min_num_windows", 3)
+    power_factor = param.optim.get("power_factor", 2.0)
+    v_base_multiplier = param.optim.get("v_base_multiplier", 0.5)
     nslice = param.nslice_to_use
     tr = param.scan_param.repetition_time
     outdir = Path(outdir)
@@ -81,19 +83,16 @@ def run_optimization(signal_path, area_path, config_path, outdir):
         xarea = np.linspace(-3, 3, param.scan_param.num_pulse)
         area = np.ones_like(xarea)
     window_size = param.scan_param.num_pulse
-    min_num_windows = 3
     nwindows = np.min([s_raw_full.shape[0] // window_size, min_num_windows]) 
     logger.info(f"Optimizing {nwindows} windows (Window Size: {window_size})")
     all_v_bases, all_opt_params = [], []
     for i in range(nwindows):
         logger.info(f"--- Starting Optimization: Window {i} ---")
         s_raw = s_raw_full[i*window_size : (i+1)*window_size, :]
-        demeaned_slices = s_raw - np.mean(s_raw, axis=0)
-        raw_sig = np.mean(demeaned_slices, axis=1)
+        raw_sig = s_raw[:, 0] - np.mean(s_raw[:, 0])
         V_fft = np.fft.rfft(raw_sig)
         V_mag, V_phase = np.abs(V_fft), np.angle(V_fft)
         V_mag_smooth = gaussian_filter1d(V_mag, sigma=1.5)
-        power_factor = 2.0
         V_mag_selective = V_mag_smooth ** power_factor
         logger.info(f"Window {i}: Base velocity reconstructed using power-law attenuation (p={power_factor})")
         fig_dbg, ax_dbg = plt.subplots(figsize=(10, 5))
@@ -108,7 +107,7 @@ def run_optimization(signal_path, area_path, config_path, outdir):
         plt.close(fig_dbg)
         V_reconstructed = V_mag_selective * np.exp(1j * V_phase)
         v_base_time = np.fft.irfft(V_reconstructed, n=len(raw_sig))
-        v_base = 0.5 * v_base_time / (np.max(np.abs(v_base_time)) + 1e-9)
+        v_base = v_base_multiplier * v_base_time / (np.max(np.abs(v_base_time)) + 1e-9)
         v_base = make_periodic(v_base)
         phase = np.angle(np.fft.rfft(v_base))
         s_target = utils.scale_data(s_raw)
@@ -152,6 +151,7 @@ def run_optimization(signal_path, area_path, config_path, outdir):
         eval_ax = plot_evaluations(res)
         eval_ax.get_figure().savefig(plots_dir / f'evaluation_win{i}.png')
         plt.close('all')
+        
     np.savetxt(outdir / 'base_velocity.txt', np.column_stack(all_v_bases))
     np.savetxt(outdir / 'optim_param.txt', np.array(all_opt_params))
     logger.info(f"Saved optimized velocities and parameters to {outdir}")
