@@ -45,9 +45,9 @@ pip install --upgrade .
 
 Before running on your own data, do a test run on the provided dummy data to ensure your environment is set up correctly and the pipeline executes as expected. The configuration file for this test `config/config_dummy.yml` is already pre-configured for the dummy dataset.
 
-Run the pipeline:
+Run the pipeline on dummy data as follow (input number of CPUs and memory in the script):
 ```bash
-bash run_dummy.sh
+bash run_local_dummy.sh
 ```
 
 ### Running on your own data
@@ -76,8 +76,10 @@ Make a copy of `config_base.yml` and name it however you want. Ensure you update
 - Specific fMRI acquisition parameters
 
 
-Execute the pipeline: 
-Run Snakemake pointing to your newly updated configuration file. You can use the `run_dummy.sh` as a template for this.
+Execute the pipeline on your real data (input number of CPUs and memory in the script): 
+```bash
+bash run_local.sh
+```
 
 ### Running in SLURM mode
 
