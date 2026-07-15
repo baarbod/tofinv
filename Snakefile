@@ -65,9 +65,6 @@ def get_train_args(wildcards):
 # --- Rules ---
 # =============================================================================
 
-# rule all:
-#     input:
-#         f"{OUTDIR}/summary_report.pdf"
 rule all:
     input:
         # Require the saved config file
@@ -108,13 +105,14 @@ rule automask:
         fs_container = config["paths"]["fs_container"],
         bind_container = config["paths"]["bind_container"],
         nslice = config["nslice_to_use"],
+        seed = config["global_seed"],
         dummy_flag = "--dummy_run" if config["dummy_run"] else ""
     resources:
         runtime = 120, nodes = 1, cpus_per_task = 1, mem_mb = 24000,
         slurm_partition = "mit_preemptable"
     shell:
         "python -m tofinv.masking --func {input.func} --sbref {input.sbref} "
-        "--nslice_to_keep {params.nslice} --outdir {params.outdir} "
+        "--nslice_to_keep {params.nslice} --outdir {params.outdir} --global_seed {params.seed} "
         "--container {params.fs_container} --container_bind {params.bind_container} {params.dummy_flag} > {log} 2>&1"
 
 rule noise:
@@ -204,21 +202,9 @@ rule aggregate_area:
     shell:
         "python -m tofinv.area --collect --outdir {params.search_dir} --outfile {output.area_collection}  > {log} 2>&1"
 
-# def get_successful_optim_runs(wildcards):
-#     all_paths = expand(
-#         f"{PREPDIR}/{{sub}}/{{ses}}/{{run}}/optim", 
-#         zip, 
-#         sub=manifest['sub'], 
-#         ses=manifest['ses'], 
-#         run=manifest['run']
-#     )
-#     existing_paths = [f for f in all_paths if os.path.exists(f)]
-#     return [os.path.dirname(p) for p in existing_paths]
-
 rule aggregate_optim:
     input:
         dones = expand(f"{PREPDIR}/{{sub}}/{{ses}}/{{run}}/optim/.optim_done", zip, sub=manifest['sub'], ses=manifest['ses'], run=manifest['run'])
-        # optims = get_successful_optim_runs
     output:
         optimized_velocity = f"{DATADIR}/crude_optim_velocity_amps.pkl"
     log:
@@ -329,7 +315,8 @@ rule train_model:
         epochs = config["train"]["train_epochs"],
         batch = config["train"]["train_batch_size"],
         lr = config["train"]["train_lr"],
-        outdir = f"{EXPDIR}/{{exp}}"
+        outdir = f"{EXPDIR}/{{exp}}",
+        seed = config["global_seed"]
     resources:
         runtime = 240, nodes = 1, cpus_per_task = 1, mem_mb = 64000, slurm_partition = "mit_preemptable", slurm_extra = "--gres=gpu:1"
     shell:
@@ -343,6 +330,7 @@ rule train_model:
             --surrogate_path {input.surrogate} \
             --outdir {params.outdir} \
             --out_weights {output.model} \
+            --global_seed {params.seed} \
             {params.train_args} > {log} 2>&1 
         """
 
