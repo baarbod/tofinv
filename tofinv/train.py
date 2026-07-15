@@ -113,7 +113,7 @@ def run_epoch(loader, model, surrogate, criterion, optimizer=None, lambda_phys=1
     return total_loss/n, total_v_loss/n, total_p_loss/n
 
 def main(args):
-    global_seed = args.config.global_seed
+    global_seed = args.global_seed
     np.random.seed(global_seed)
     torch.manual_seed(global_seed)
     if torch.cuda.is_available():
@@ -232,4 +232,5 @@ if __name__ == '__main__':
     parser.add_argument("--lambda_phys", type=float, default=0.5, help="Weight of the physics loss")
     parser.add_argument("--patience", type=int, default=20)
     parser.add_argument("--min_delta", type=float, default=1e-5)
+    parser.add_argument('--global_seed', default=42, type=int, help='seed for reproducibility')
     main(parser.parse_args())
