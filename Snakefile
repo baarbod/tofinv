@@ -106,13 +106,18 @@ rule automask:
         bind_container = config["paths"]["bind_container"],
         nslice = config["nslice_to_use"],
         seed = config["global_seed"],
-        dummy_flag = "--dummy_run" if config["dummy_run"] else ""
+        dummy_flag = "--dummy_run" if config["dummy_run"] else "",
+        metrics = " ".join(config.get("automask", {}).get("metrics_list", ["sd"]))
     resources:
-        runtime = 120, nodes = 1, cpus_per_task = 1, mem_mb = 24000,
+        runtime = config["resources"]["automask"]["runtime"], 
+        nodes = config["resources"]["automask"]["nodes"], 
+        cpus_per_task = config["resources"]["automask"]["cpus"], 
+        mem_mb = config["resources"]["automask"]["mem_mb"],
         slurm_partition = "mit_preemptable"
     shell:
         "python -m tofinv.masking --func {input.func} --sbref {input.sbref} "
         "--nslice_to_keep {params.nslice} --outdir {params.outdir} --global_seed {params.seed} "
+        "--metrics_list {params.metrics} "
         "--container {params.fs_container} --container_bind {params.bind_container} {params.dummy_flag} > {log} 2>&1"
 
 rule noise:
@@ -127,7 +132,10 @@ rule noise:
     params:
         outdir = f"{PREPDIR}/{{sub}}/{{ses}}/{{run}}/noise"
     resources:
-        runtime = 30, nodes = 1, cpus_per_task = 1, mem_mb = 20000, 
+        runtime = config["resources"]["noise"]["runtime"], 
+        nodes = config["resources"]["noise"]["nodes"], 
+        cpus_per_task = config["resources"]["noise"]["cpus"], 
+        mem_mb = config["resources"]["noise"]["mem_mb"], 
         slurm_partition = "mit_preemptable"
     shell:
         "python -m tofinv.noise --func {input.func} --synthseg {input.synthseg} "
@@ -143,7 +151,10 @@ rule area:
     params:
         func_vox_mm = config["scan_param"]["slice_width"]*10
     resources:
-        runtime = 120, nodes = 1, cpus_per_task = 1, mem_mb = 16000,
+        runtime = config["resources"]["area"]["runtime"], 
+        nodes = config["resources"]["area"]["nodes"], 
+        cpus_per_task = config["resources"]["area"]["cpus"], 
+        mem_mb = config["resources"]["area"]["mem_mb"],
         slurm_partition = "mit_normal"
     shell:
         "python -m tofinv.area --func {input.func} --anat {input.anat} "
@@ -162,7 +173,10 @@ rule optim:
         outdir = f"{PREPDIR}/{{sub}}/{{ses}}/{{run}}/optim"
     threads: config["resources"]["threads_low"]
     resources:
-        runtime = 320, nodes = 1, cpus_per_task = 20, mem_mb = 42000,
+        runtime = config["resources"]["optim"]["runtime"], 
+        nodes = config["resources"]["optim"]["nodes"], 
+        cpus_per_task = config["resources"]["optim"]["cpus"], 
+        mem_mb = config["resources"]["optim"]["mem_mb"],
         slurm_partition = "mit_preemptable"
     shell:
         "python -m tofinv.optim --signal {input.signal} --area {input.area} "
@@ -182,7 +196,10 @@ rule aggregate_noise:
         length = config["scan_param"]["num_pulse"],
         search_dir = PREPDIR
     resources:
-        runtime = 20, nodes = 1, cpus_per_task = 1, mem_mb = 20000,               
+        runtime = config["resources"]["aggregate_noise"]["runtime"], 
+        nodes = config["resources"]["aggregate_noise"]["nodes"], 
+        cpus_per_task = config["resources"]["aggregate_noise"]["cpus"], 
+        mem_mb = config["resources"]["aggregate_noise"]["mem_mb"],               
         slurm_partition = "mit_preemptable"
     shell:
         "python -m tofinv.noise --collect --outdir {params.search_dir} "
@@ -198,7 +215,9 @@ rule aggregate_area:
     params:
         search_dir = PREPDIR
     resources:
-        runtime = 15, mem_mb = 4000, slurm_partition = "mit_normal"
+        runtime = config["resources"]["aggregate_area"]["runtime"], 
+        mem_mb = config["resources"]["aggregate_area"]["mem_mb"], 
+        slurm_partition = "mit_normal"
     shell:
         "python -m tofinv.area --collect --outdir {params.search_dir} --outfile {output.area_collection}  > {log} 2>&1"
 
@@ -212,7 +231,11 @@ rule aggregate_optim:
     params:
         search_dir = PREPDIR
     resources:
-        runtime = 120, nodes = 1, cpus_per_task = 20, mem_mb = 64000, slurm_partition = "mit_normal"
+        runtime = config["resources"]["aggregate_optim"]["runtime"], 
+        nodes = config["resources"]["aggregate_optim"]["nodes"], 
+        cpus_per_task = config["resources"]["aggregate_optim"]["cpus"], 
+        mem_mb = config["resources"]["aggregate_optim"]["mem_mb"], 
+        slurm_partition = "mit_normal"
     shell:
         "python -m tofinv.optim --collect --outdir {params.search_dir} --outfile {output.optimized_velocity} > {log} 2>&1"
 
@@ -231,7 +254,11 @@ rule synthdata_sampling:
     group: "sampling"
     threads: config["resources"]["threads_high"]
     resources:
-        runtime = 120, nodes = 1, cpus_per_task = 1, mem_mb = 8000, slurm_partition = "mit_preemptable"
+        runtime = config["resources"]["synthdata_sampling"]["runtime"], 
+        nodes = config["resources"]["synthdata_sampling"]["nodes"], 
+        cpus_per_task = config["resources"]["synthdata_sampling"]["cpus"], 
+        mem_mb = config["resources"]["synthdata_sampling"]["mem_mb"], 
+        slurm_partition = "mit_preemptable"
     shell:
         "python -m tofinv.synthdata.sampling --config {input.config} --taskid {wildcards.batch} "
         "--optim_path {input.voptim} --area_path {input.area_collection} --output {output.pkl} > {log} 2>&1"
@@ -247,7 +274,11 @@ rule synthdata_sort:
         outdir = f"{SYNTHDIR}/inputs_batched_sorted",
         batch_size = config["synthetic"]["num_samples"] // config["synthetic"]['num_batches']
     resources:
-        runtime = 60, nodes = 1, cpus_per_task = 1, mem_mb = 32000, slurm_partition = "mit_normal",
+        runtime = config["resources"]["synthdata_sort"]["runtime"], 
+        nodes = config["resources"]["synthdata_sort"]["nodes"], 
+        cpus_per_task = config["resources"]["synthdata_sort"]["cpus"], 
+        mem_mb = config["resources"]["synthdata_sort"]["mem_mb"], 
+        slurm_partition = "mit_normal"
     shell:
         "python -m tofinv.synthdata.processing sort --input_dir {SYNTHDIR}/inputs_batched "
         "--output_dir {params.outdir} --batch_size {params.batch_size} > {log} 2>&1"
@@ -265,7 +296,11 @@ rule synthdata_simulate:
     group: "simulation"
     threads: config["resources"]["threads_high"]
     resources:
-        runtime = 240, nodes = 1, cpus_per_task = 5, mem_mb = 16000, slurm_partition = "mit_preemptable"
+        runtime = config["resources"]["synthdata_simulate"]["runtime"], 
+        nodes = config["resources"]["synthdata_simulate"]["nodes"], 
+        cpus_per_task = config["resources"]["synthdata_simulate"]["cpus"], 
+        mem_mb = config["resources"]["synthdata_simulate"]["mem_mb"], 
+        slurm_partition = "mit_preemptable"
     shell:
         "python -m tofinv.synthdata.simulation --input_dir {params.input_dir} "
         "--task_id {wildcards.batch} --output_dir {params.output_dir} > {log} 2>&1"
@@ -279,7 +314,11 @@ rule synthdata_combine:
         f"{LOGDIR}/synthdata_combine.log"
     threads: config["resources"]["threads_high"]
     resources:
-        runtime = 240, nodes = 1, cpus_per_task = 64, mem_mb = 100000, slurm_partition = "mit_normal"
+        runtime = config["resources"]["synthdata_combine"]["runtime"], 
+        nodes = config["resources"]["synthdata_combine"]["nodes"], 
+        cpus_per_task = config["resources"]["synthdata_combine"]["cpus"], 
+        mem_mb = config["resources"]["synthdata_combine"]["mem_mb"], 
+        slurm_partition = "mit_normal"
     shell:
         "python -m tofinv.synthdata.processing combine --sim_dir {SYNTHDIR}/simulations_batched --output_dir {SYNTHDIR} > {log} 2>&1"
 
@@ -297,7 +336,12 @@ rule train_surrogate:
     params:
         plot_dir = f"{EXPDIR}/surrogate_model/surrogate_plots"
     resources:
-        runtime = 360, nodes = 1, cpus_per_task = 4, mem_mb = 64000, slurm_partition = "mit_preemptable", slurm_extra = "--gres=gpu:4"
+        runtime = config["resources"]["train_surrogate"]["runtime"], 
+        nodes = config["resources"]["train_surrogate"]["nodes"], 
+        cpus_per_task = config["resources"]["train_surrogate"]["cpus"], 
+        mem_mb = config["resources"]["train_surrogate"]["mem_mb"], 
+        slurm_partition = "mit_preemptable", 
+        slurm_extra = f"--gres=gpu:{config['resources']['train_surrogate']['gpus']}"
     shell:
         "python -m tofinv.surrogate --dataset {input.dataset} --out_weights {output.weights} --outdir {params.plot_dir} > {log} 2>&1"
 
@@ -318,7 +362,12 @@ rule train_model:
         outdir = f"{EXPDIR}/{{exp}}",
         seed = config["global_seed"]
     resources:
-        runtime = 240, nodes = 1, cpus_per_task = 1, mem_mb = 64000, slurm_partition = "mit_preemptable", slurm_extra = "--gres=gpu:1"
+        runtime = config["resources"]["train_model"]["runtime"], 
+        nodes = config["resources"]["train_model"]["nodes"], 
+        cpus_per_task = config["resources"]["train_model"]["cpus"], 
+        mem_mb = config["resources"]["train_model"]["mem_mb"], 
+        slurm_partition = "mit_preemptable", 
+        slurm_extra = f"--gres=gpu:{config['resources']['train_model']['gpus']}"
     shell:
         """
         python -m tofinv.train \
@@ -351,7 +400,11 @@ rule evaluate:
     params:
         outdir = f"{EVALDIR}/{{exp}}/{{sub}}/{{ses}}/{{run}}"
     resources:
-        runtime = 240, nodes = 1, cpus_per_task = 1, mem_mb = 24000, slurm_partition = "mit_preemptable"
+        runtime = config["resources"]["evaluate"]["runtime"], 
+        nodes = config["resources"]["evaluate"]["nodes"], 
+        cpus_per_task = config["resources"]["evaluate"]["cpus"], 
+        mem_mb = config["resources"]["evaluate"]["mem_mb"], 
+        slurm_partition = "mit_preemptable"
     shell:
         "python -m tofinv.evaluation "
         "--signal {input.signal} --area {input.area} --model {input.model} "

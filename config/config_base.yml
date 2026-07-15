@@ -1,6 +1,7 @@
 
 nslice_to_use: 3 # keep only these edge slices
 dummy_run: False # this flag must be true if running with the dummy data, otherwise set to false
+global_seed: 42 # random seed for reproducibility
 
 # paste in your paths
 paths:
@@ -9,24 +10,26 @@ paths:
   fs_container: null
   bind_container: null
 
+automask:
+  metrics_list:
+    - sd
 
 # keyword parameters for gp_minimize used in the optimization module
-# you probably would not need to change these, except increasing n_calls and n_initial_points for better performance at the cost of longer runtime
-optim:
+optim_gp_minimize:
   dimensions:
-    - [0.0001, 2.0] # scaling factor
-    - [0.0001, 5.0] # frequency gain factor
-    - [-0.3, 0.3] # velocity offset
-  x0: [0.5, 2.0, 0.05] # initial guess for the optimization
-  n_calls: 200 # number of optimization iterations (including initial points)
-  n_initial_points: 50 # number of initial random points to sample before starting the optimization
-  initial_point_generator: "lhs" # method for generating initial random points, options are ["random", "lhs", "sobol"]
-  acq_optimizer: "lbfgs" # method for optimizing the acquisition function, options are ["lbfgs", "sampling"]
-  acq_func: "EI" # acquisition function to use, options are ["EI", "PI", "LCB"]
+    - [0.01, 1.5] # scaling factor
+    - [0.01, 6.0] # frequency gain factor
+  x0: [0.1, 2.0] # initial guess for the optimization
+  n_calls: 100 # number of optimization iterations (including initial points)
+  n_initial_points: 25 # number of initial random points to sample before starting the optimization
+  initial_point_generator: "lhs" # method for generating initial random points
+  acq_optimizer: "lbfgs" # method for optimizing the acquisition function
+  acq_func: "EI" # acquisition function to use
 
-resources:
-  threads_high: 100
-  threads_low: 10
+optim:
+  min_num_windows: 3
+  power_factor: 2.0
+  v_base_multiplier: 0.5
 
 # parameters related to neural network training
 train:
@@ -36,16 +39,15 @@ train:
 
 # different argument sets to pass to training module
 train_configs:
-  train_nonoise: "--batch 64 --lr 0.001 --noise_method none"
-  train_pca_noise: "--batch 64 --lr 0.001 --noise_method pca"
+  train_base: "--batch 256 --lr 0.001  --noise_method none --lambda_phys 0.5"
 
 # parameters for the synthetic dataset generation
 synthetic:
-  num_samples: 50000 # total number of synthetic data samples (you can increase this for better performance at the cost of longer runtime)
-  num_batches: 50 # number of subdivisions for splitting computations
+  num_samples: 100000 # total number of synthetic data samples
+  num_batches: 100 # number of subdivisions for splitting computations
   areamode: 'collection' # options are ['straight_tube', 'collection']
-  jitter_lb: 0.9 # lower bound for random jittering of optimization parameters to generate synthetic data for training
-  jitter_ub: 1.1 # lower bound for random jittering of optimization parameters to generate synthetic data for training
+  jitter_lb: 0.8 # lower bound for random jittering of optimization parameters to generate synthetic data for training
+  jitter_ub: 1.2 # lower bound for random jittering of optimization parameters to generate synthetic data for training
 
 # parameters used in the fMRI acquisition protocol
 scan_param:
@@ -81,3 +83,79 @@ scan_param:
     - 0.2875
     - 0.145
 
+resources:
+
+  threads_high: 100
+  threads_low: 10
+
+  # resources for running in SLURM. Ignore if running locally
+  automask:
+    runtime: 120
+    nodes: 1
+    cpus: 1
+    mem_mb: 24000
+  noise:
+    runtime: 30
+    nodes: 1
+    cpus: 1
+    mem_mb: 20000
+  area:
+    runtime: 120
+    nodes: 1
+    cpus: 1
+    mem_mb: 16000
+  optim:
+    runtime: 320
+    nodes: 1
+    cpus: 20
+    mem_mb: 42000
+  aggregate_noise:
+    runtime: 20
+    nodes: 1
+    cpus: 1
+    mem_mb: 20000
+  aggregate_area:
+    runtime: 15
+    mem_mb: 4000
+  aggregate_optim:
+    runtime: 120
+    nodes: 1
+    cpus: 20
+    mem_mb: 64000
+  synthdata_sampling:
+    runtime: 120
+    nodes: 1
+    cpus: 1
+    mem_mb: 8000
+  synthdata_sort:
+    runtime: 60
+    nodes: 1
+    cpus: 1
+    mem_mb: 32000
+  synthdata_simulate:
+    runtime: 240
+    nodes: 1
+    cpus: 5
+    mem_mb: 16000
+  synthdata_combine:
+    runtime: 240
+    nodes: 1
+    cpus: 64
+    mem_mb: 100000
+  train_surrogate:
+    runtime: 360
+    nodes: 1
+    cpus: 4
+    mem_mb: 64000
+    gpus: 4
+  train_model:
+    runtime: 240
+    nodes: 1
+    cpus: 1
+    mem_mb: 64000
+    gpus: 1
+  evaluate:
+    runtime: 240
+    nodes: 1
+    cpus: 1
+    mem_mb: 24000
