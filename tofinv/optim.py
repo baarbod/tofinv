@@ -54,6 +54,10 @@ def make_periodic(signal, alpha=0.1):
 def run_optimization(signal_path, area_path, config_path, outdir):
     logger.info(f"Loading configuration from {config_path}")
     param = OmegaConf.load(config_path)
+    
+    logger.info(f"Initial alpha_list length: {len(param.scan_param.alpha_list)}")
+    logging.info(param.scan_param.alpha_list)
+    logger.info(OmegaConf.to_yaml(param))        
     raw_alpha = param.scan_param.alpha_list
     if isinstance(raw_alpha, str):
         logger.warning("Detected alpha_list parsed as string. Cleaning and ensuring positive values...")
@@ -64,8 +68,12 @@ def run_optimization(signal_path, area_path, config_path, outdir):
             abs(float(str(x).replace('--', '-'))) if isinstance(x, str) else abs(float(x))
             for x in raw_alpha
         ]
+    logger.info(f"Verified positive alpha_list length: {len(param.scan_param.alpha_list)}")
+    logging.info(param.scan_param.alpha_list)
+    logger.info(OmegaConf.to_yaml(param))
     optim_kwargs = OmegaConf.to_container(param.optim_gp_minimize, resolve=True)
     optim_kwargs["dimensions"] = [tuple(dim) for dim in optim_kwargs["dimensions"]]    
+    
     optim_kwargs["random_state"] = param.global_seed
     min_num_windows = param.optim.get("min_num_windows", 3)
     power_factor = param.optim.get("power_factor", 2.0)
