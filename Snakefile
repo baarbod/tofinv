@@ -26,6 +26,7 @@ manifest = pd.read_csv(
     header=0 if "subject" in open(config["paths"]["input_manifest"]).readline() else None,
     quotechar='"',
     skipinitialspace=True,
+    dtype=str,
     names=["sub", "ses", "run", "func", "sbref", "anat", "aseg", "reg"]
 )
 manifest.set_index(["sub", "ses", "run"], drop=False, inplace=True)
