@@ -15,7 +15,6 @@ import skopt
 from scipy.signal.windows import tukey
 from scipy.signal import find_peaks
 from scipy.ndimage import gaussian_filter1d
-from tofinv.artifacts import atomic_pickle_dump
 
 logging.basicConfig(
     level=logging.INFO,
