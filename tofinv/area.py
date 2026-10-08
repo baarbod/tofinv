@@ -24,23 +24,21 @@ def add_boundary(A, depthfromslc1):
     clip_min = 20
     area_clipped = np.clip(A, clip_min, None)
 
-    # Ramp 1
     ramp_start, ramp_end, ramp_target = -50, -60, 120
     area_clipped = area_clipped.copy()
     mask_ramp = (depthfromslc1 <= ramp_start) & (depthfromslc1 >= ramp_end)
     area_clipped[mask_ramp] = clip_min + (ramp_target - clip_min) * (ramp_start - depthfromslc1[mask_ramp]) / (ramp_start - ramp_end)
     area_clipped[depthfromslc1 < ramp_end] = ramp_target
 
-    # Ramp 2
     ramp_start, ramp_end, ramp_target = 50, 60, 120
     mask_ramp = (depthfromslc1 >= ramp_start) & (depthfromslc1 <= ramp_end)
     area_clipped[mask_ramp] = clip_min + (ramp_target - clip_min) * (ramp_start - depthfromslc1[mask_ramp]) / (ramp_start - ramp_end)
     area_clipped[depthfromslc1 > ramp_end] = ramp_target
     return area_clipped
 
-def create_slice_montage(anat_slices, mask_slices, aseg_slices, depth_values, output_path):
+def create_slice_montage(anat_slices, mask_slices, aseg_slices, depth_values, output_path, csf_label=15):
     active_indices = [i for i in range(len(depth_values)) 
-                      if np.any(mask_slices[..., i] > 0) or np.any(aseg_slices[..., i] == 15)]
+                      if np.any(mask_slices[..., i] > 0) or np.any(aseg_slices[..., i] == csf_label)]
     
     if not active_indices:
         logger.warning(f"No active slices found for the 4th ventricle. Skipping montage: {output_path}")
@@ -65,7 +63,7 @@ def create_slice_montage(anat_slices, mask_slices, aseg_slices, depth_values, ou
     for plot_pos, i in enumerate(plot_indices):
         ax = axes[plot_pos]
         ax.imshow(anat_slices[..., i].T, cmap='gray', origin='lower', interpolation='none')
-        aseg_layer = (aseg_slices[..., i] == 15).astype(float)
+        aseg_layer = (aseg_slices[..., i] == csf_label).astype(float)
         if np.any(aseg_layer):
             ax.contour(aseg_layer.T, colors=BRIGHT_LIME, levels=[0.5], linewidths=1.5)
         active_mask = (mask_slices[..., i] > 0).astype(float)
@@ -79,7 +77,7 @@ def create_slice_montage(anat_slices, mask_slices, aseg_slices, depth_values, ou
         fig.delaxes(axes[j])
         
     legend_elements = [
-        Line2D([0], [0], color=BRIGHT_LIME, lw=2, label='Aseg Label (15) Target'),
+        Line2D([0], [0], color=BRIGHT_LIME, lw=2, label=f'Aseg Label ({csf_label}) Target'),
         mpatches.Patch(color=BRIGHT_RED, alpha=overlay_alpha, label='Voxels Included in Sum')
     ]
     legend = fig.legend(handles=legend_elements, loc='upper center', ncol=2, fontsize='large', frameon=True)
@@ -93,7 +91,8 @@ def create_slice_montage(anat_slices, mask_slices, aseg_slices, depth_values, ou
     plt.close()
     logger.info(f"Successfully saved montage to {output_path}")
     
-def compute_area(func_path, anat_path, aseg_path, reg_path, output_path, func_vox=2.5, anat_vox=1.0):
+def compute_area(func_path, anat_path, aseg_path, reg_path, output_path, func_vox=2.5,
+                 anat_vox=1.0, csf_label=15):
     logger.info(f"Starting area computation for {func_path}")
     
     try:
@@ -104,7 +103,6 @@ def compute_area(func_path, anat_path, aseg_path, reg_path, output_path, func_vo
         logger.error(f"Failed to load NIfTI files: {e}")
         raise
 
-    # Parameterized Affine Matrices
     anat_half = anat_vox / 2.0
     func_half = func_vox / 2.0
 
@@ -125,11 +123,10 @@ def compute_area(func_path, anat_path, aseg_path, reg_path, output_path, func_vo
     logger.info(f"Reading registration matrix from {reg_path}")
     R = np.loadtxt(reg_path, skiprows=4, max_rows=4) 
 
-    # Filter for 4th ventricle (Label 15)
-    mask_15 = (aseg_data == 15)
+    mask_15 = (aseg_data == csf_label)
     if not np.any(mask_15):
-        logger.error("Label 15 (4th ventricle) not found in aseg volume!")
-        raise ValueError("Empty aseg label 15")
+        logger.error("Configured CSF label %s was not found in aseg volume!", csf_label)
+        raise ValueError(f"Empty aseg label {csf_label}")
     
     aseg_data[~mask_15] = 0
     centroid_3d = center_of_mass(aseg_data)
@@ -152,7 +149,6 @@ def compute_area(func_path, anat_path, aseg_path, reg_path, output_path, func_vo
     viz_anat = np.zeros((deltax.size, deltay.size, deltaz.size))
     viz_aseg = np.zeros((deltax.size, deltay.size, deltaz.size))
 
-    # Grid search
     inv_anat = np.linalg.inv(anatVOX2RAS)
     inv_R = np.linalg.inv(R)
     
@@ -170,7 +166,7 @@ def compute_area(func_path, anat_path, aseg_path, reg_path, output_path, func_vo
                     viz_anat[xind, yind, zind] = val_anat
                     viz_aseg[xind, yind, zind] = val_aseg
                     
-                    if val_aseg == 15:
+                    if val_aseg == csf_label:
                         area_contribution[xind, yind, zind] = voxel_area
                         T1[xind, yind, zind] = val_anat
 
@@ -184,7 +180,6 @@ def compute_area(func_path, anat_path, aseg_path, reg_path, output_path, func_vo
             area_scaled = Aslice * (ref / T1slice)
             A[i] = np.nansum(area_scaled)
 
-    # Convert functional voxel depth to mm
     depthfromslc1 = deltaz * func_vox 
     A = add_boundary(A, depthfromslc1)
     
@@ -196,7 +191,6 @@ def compute_area(func_path, anat_path, aseg_path, reg_path, output_path, func_vo
     np.savetxt(out_dir / "area.txt", np.column_stack([depth_cm, A_cm2]), fmt="%.6f")
     logger.info(f"Saved area.txt to {out_dir}")
 
-    # Plot
     plt.figure()
     plt.plot(depth_cm, A_cm2, marker='.')
     plt.xlabel("Distance from 1st fMRI slice (cm)")
@@ -211,7 +205,8 @@ def compute_area(func_path, anat_path, aseg_path, reg_path, output_path, func_vo
         area_contribution, 
         viz_aseg, 
         depth_cm, 
-        out_dir / "slice_inspection.png"
+        out_dir / "slice_inspection.png",
+        csf_label=csf_label
     )
 
 def aggregate_area(search_dir, outfile):
@@ -229,8 +224,9 @@ def aggregate_area(search_dir, outfile):
             sub = parts[area_idx - 2]
             ses = parts[area_idx - 1]
             data = np.loadtxt(f) 
-            collection.append((data[:, 0], data[:, 1], sub))
-            logger.info(f"Collected: {sub} | {ses}")
+            source_id = f"{sub}/{ses}"
+            collection.append((data[:, 0], data[:, 1], source_id))
+            logger.info(f"Collected: {source_id}")
 
         except (ValueError, IndexError) as e:
             logger.warning(f"Skipping problematic path: {f}")
@@ -249,6 +245,7 @@ def main():
     parser.add_argument('--reg', type=str)
     parser.add_argument('--func_vox', type=float, default=2.5)
     parser.add_argument('--anat_vox', type=float, default=1.0)
+    parser.add_argument('--csf_label', type=int, default=15)
     parser.add_argument('--outdir', type=str)
     parser.add_argument('--outfile', type=str)
     
@@ -258,7 +255,7 @@ def main():
         aggregate_area(args.outdir, args.outfile)
     else:
         compute_area(args.func, args.anat, args.aseg, args.reg, args.outdir, 
-                     func_vox=args.func_vox, anat_vox=args.anat_vox)
+                     func_vox=args.func_vox, anat_vox=args.anat_vox, csf_label=args.csf_label)
 
 if __name__ == "__main__":
     main()
