@@ -1,4 +1,3 @@
-# tofinv/synthdata/processing.py
 import os
 import pickle
 import logging
@@ -7,6 +6,7 @@ import numpy as np
 import shutil
 import sys
 from concurrent.futures import ProcessPoolExecutor
+from tofinv.utils import available_cpu_count
 
 # --- Logging Configuration ---
 logging.basicConfig(
@@ -17,10 +17,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- SORTING LOGIC ---
-
 def sort_inputs(input_dir, output_dir, batch_size):
-    """Load all input batches, sort them by proton count, and redistribute."""
     logger.info(f"--- Starting Input Sorting from {input_dir} ---")
     inputs_all_samples = []
     nproton_list = []
@@ -38,15 +35,15 @@ def sort_inputs(input_dir, output_dir, batch_size):
                 batch_inputs = pickle.load(f)
             for sample_input in batch_inputs:
                 inputs_all_samples.append(sample_input)
-                # x0_array length determines simulation time (proton count)
                 nproton_list.append(sample_input['x0_array'].shape[0])
         except Exception as e:
-            logger.warning(f"Failed to load batch {batch_name}: {e}")
+            raise RuntimeError(f"Failed to load sampling batch {batch_name}: {e}") from e
 
     total_samples = len(inputs_all_samples)
+    if total_samples == 0:
+        raise RuntimeError("No sampling inputs were loaded.")
     logger.info(f"Total samples collected: {total_samples}")
 
-    # Sort descending (largest simulations first to optimize HPC scheduling)
     logger.info("Sorting samples by proxy for workload (particle count)...")
     sort_indices = np.argsort(nproton_list)[::-1]
     inputs_all_samples_sorted = [inputs_all_samples[i] for i in sort_indices]
@@ -71,40 +68,21 @@ def sort_inputs(input_dir, output_dir, batch_size):
     
     logger.info(f"Successfully redistributed {total_samples} samples into {len(batches)} batches.")
 
-# --- COMBINING LOGIC ---
-
 def _process_sample(sample_path):
-    """
-    Worker function to handle individual file I/O and transformations.
-    """
     try:
         with open(sample_path, "rb") as f:
             data = pickle.load(f)
-        
-        # Combine features: X (signal), xarea (geometry), area (geometry)
-        xx = np.column_stack((
-            data['X'], 
-            data['xarea'], 
-            data['area']
-        ))
-        
-        # Transform dimensions for model compatibility
+        xx = np.column_stack((data['X'], data['xarea'], data['area']))
         xx = np.swapaxes(xx, -1, -2)
         yy = np.expand_dims(data['v'], axis=0)
-
-        # Filter out bad data
         if np.isnan(xx).any() or np.isinf(xx).any():
             return "invalid"
-            
         return xx, yy
     except Exception:
         return "error"
 
-def combine_simulations(sim_dir, output_dir):
-    """Parallelized gathering and transformation of simulation samples."""
+def combine_simulations(sim_dir, output_dir, workers=None, expected_samples=None):
     logger.info(f"--- Starting Simulation Dataset Combination in {sim_dir} ---")
-    
-    # 1. Gather all file paths first
     all_paths = []
     batch_dirs = sorted([d for d in os.listdir(sim_dir) if d.startswith("batch_")])
     for batch_name in batch_dirs:
@@ -113,24 +91,20 @@ def combine_simulations(sim_dir, output_dir):
             os.path.join(batch_subdir, f) 
             for f in os.listdir(batch_subdir) if f.endswith(".pkl")
         ])
-
     num_files = len(all_paths)
     if not all_paths:
         logger.error("No simulation result files (.pkl) found in subdirectories.")
-        return
+        raise FileNotFoundError("No simulation result files (.pkl) found in subdirectories.")
 
-    # 2. Process in parallel
-    n_workers = len(os.sched_getaffinity(0))
+    n_workers = min(workers or available_cpu_count(), available_cpu_count())
     X_list, y_list = [], []
     invalid_count = 0
     error_count = 0
-    
     logger.info(f"Processing {num_files} samples using {n_workers} workers...")
 
     with ProcessPoolExecutor(max_workers=n_workers) as executor:
         results = list(executor.map(_process_sample, all_paths))
 
-    # 3. Filter and Stack
     for res in results:
         if isinstance(res, tuple):
             X_list.append(res[0])
@@ -143,45 +117,43 @@ def combine_simulations(sim_dir, output_dir):
     if invalid_count > 0:
         logger.warning(f"Discarded {invalid_count} samples containing NaNs or Infs.")
     if error_count > 0:
-        logger.error(f"Failed to process {error_count} samples due to I/O or Pickle errors.")
+        raise RuntimeError(f"Failed to process {error_count} simulation samples due to I/O or pickle errors.")
 
     if not X_list:
         logger.error("No valid samples collected. Dataset construction aborted.")
-        return
+        raise RuntimeError("No valid samples collected; dataset construction aborted.")
+    if expected_samples is not None and len(X_list) != expected_samples:
+        raise RuntimeError(f"Expected {expected_samples} valid samples, found {len(X_list)}.")
 
     logger.info("Stacking data into final tensors...")
     X_final = np.stack(X_list, axis=0)
     y_final = np.stack(y_list, axis=0)
 
-    # 4. Save results
     os.makedirs(output_dir, exist_ok=True)
     master_file = os.path.join(output_dir, "dataset.pkl")
-    with open(master_file, "wb") as f:
-        pickle.dump([X_final, y_final], f)
+    atomic_pickle_dump([X_final, y_final], master_file)
         
     logger.info(f"Saved master dataset to {master_file}")
     logger.info(f"Final Tensor Shapes -> X: {X_final.shape}, y: {y_final.shape}")
-
-# --- CLI DISPATCHER ---
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Input sorting and dataset combination tools")
     subparsers = parser.add_subparsers(dest="action", required=True)
 
-    # Sort sub-command
     sort_parser = subparsers.add_parser("sort", help="Sort and redistribute input batches")
     sort_parser.add_argument("--input_dir", required=True)
     sort_parser.add_argument("--output_dir", required=True)
     sort_parser.add_argument("--batch_size", type=int, required=True)
 
-    # Combine sub-command
     combine_parser = subparsers.add_parser("combine", help="Aggregate simulation results into a master dataset")
     combine_parser.add_argument("--sim_dir", required=True)
     combine_parser.add_argument("--output_dir", required=True)
+    combine_parser.add_argument("--workers", type=int, default=None)
+    combine_parser.add_argument("--expected_samples", type=int, default=None)
 
     args = parser.parse_args()
 
     if args.action == "sort":
         sort_inputs(args.input_dir, args.output_dir, args.batch_size)
     elif args.action == "combine":
-        combine_simulations(args.sim_dir, args.output_dir)
+        combine_simulations(args.sim_dir, args.output_dir, args.workers, args.expected_samples)
