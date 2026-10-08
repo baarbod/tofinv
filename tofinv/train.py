@@ -5,8 +5,6 @@ import pickle
 import logging
 import argparse
 import sys
-import time
-import json
 import numpy as np
 import torch
 import torch.nn as nn
@@ -28,7 +26,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class SurrogateConv1D(nn.Module):
-    """Re-definition of the Surrogate architecture for loading weights."""
     def __init__(self, in_channels, out_channels, hidden_dim=64):
         super().__init__()
         self.network = nn.Sequential(
@@ -45,34 +42,35 @@ class SurrogateConv1D(nn.Module):
         )
     def forward(self, x): return self.network(x)
 
-def load_dataset(dataset_path, noisedir=None, noise_method='none', gauss_low=0.01, gauss_high=0.1, scalemax=0.1):
-    """Loads, noises, scales, and splits the dataset."""
+def load_dataset(dataset_path, noisedir=None, noise_method='none', gauss_low=0.01,
+                 gauss_high=0.1, scalemax=0.1, global_seed=42):
     logger.info(f"Loading raw dataset from {dataset_path}")
     with open(dataset_path, "rb") as f:
         X, y = pickle.load(f)
+    X = np.asarray(X, dtype=np.float64).copy()
+    y = np.asarray(y, dtype=np.float64)
+    if X.ndim != 3 or y.ndim != 3 or X.shape[0] != y.shape[0] or X.shape[1] < 3:
+        raise ValueError("Dataset must contain X=(samples, slices+2, time) and y=(samples, 1, time).")
     n_samples = X.shape[0]
     nslice_to_use = X.shape[1] - 2
     area_idx = nslice_to_use + 1
+    if X.shape[2] != y.shape[2] or n_samples < 2:
+        raise ValueError("Dataset needs at least two matching input/target samples.")
+    rng = np.random.default_rng(global_seed)
     if noise_method == 'gaussian':
         logger.info(f"Injecting Gaussian noise (range: {gauss_low}-{gauss_high})")
-        X = noise.add_gaussian_noise(X, gauss_low=gauss_low, gauss_high=gauss_high)
+        X = noise.add_gaussian_noise(
+            X, nslice=nslice_to_use, gauss_low=gauss_low, gauss_high=gauss_high, rng=rng
+        )
     elif noise_method == 'pca':
         if noisedir is None:
             raise ValueError("noisedir must be provided when using PCA-based noise.")  
         logger.info(f"Injecting PCA-based noise from {noisedir}")
-        path_to_pca_model = os.path.join(noisedir, 'pca_model.pkl')
-        if os.path.exists(path_to_pca_model):
-            model = noise.load_pca_model(path_to_pca_model)
-        else:
-            logger.info(f"PCA model not found. Generating a new one from noise data.")
-            path_to_noise_data = os.path.join(noisedir, 'noise_data.pkl') 
-            if not os.path.exists(path_to_noise_data):
-                raise FileNotFoundError(f"Noise data not found at {path_to_noise_data}.") 
-            noise_data = noise.load_noise_data(path_to_noise_data)
-            model = noise.define_pca_model(noise_data)
-            noise.save_pca_model(model, path_to_pca_model)
-            logger.info(f"Saved new PCA model to {path_to_pca_model}")
-        X = noise.add_pca_noise(X, model, scalemax=scalemax)
+        path_to_noise_data = os.path.join(noisedir, 'noise_data.pkl')
+        if not os.path.exists(path_to_noise_data):
+            raise FileNotFoundError(f"Noise data not found at {path_to_noise_data}.")
+        model = noise.define_pca_model(noise.load_noise_data(path_to_noise_data))
+        X = noise.add_pca_noise(X, model, nslice=nslice_to_use, scalemax=scalemax, rng=rng)
     logger.info("Applying signal scaling and area normalization...")
     for i in range(n_samples):
         to_scale = X[i, :nslice_to_use, :].T 
@@ -80,13 +78,12 @@ def load_dataset(dataset_path, noisedir=None, noise_method='none', gauss_low=0.0
         X[i, area_idx, :] = utils.scale_area(X[i, nslice_to_use, :], X[i, area_idx, :])
     flow_x = X[:, :nslice_to_use, :]
     area_x = X[:, area_idx : area_idx + 1, :]
-    idx_train, idx_test = train_test_split(np.arange(n_samples), test_size=0.1, random_state=42)
+    idx_train, idx_test = train_test_split(np.arange(n_samples), test_size=0.1, random_state=global_seed)
     def to_torch(arr): return torch.tensor(arr, dtype=torch.float32)
     return (to_torch(flow_x[idx_train]), to_torch(area_x[idx_train]), to_torch(y[idx_train]),
             to_torch(flow_x[idx_test]), to_torch(area_x[idx_test]), to_torch(y[idx_test]))
 
 def run_epoch(loader, model, surrogate, criterion, optimizer=None, lambda_phys=1.0, device='cpu'):
-    """Handles both training and evaluation logic."""
     is_train = optimizer is not None
     model.train() if is_train else model.eval()
     total_loss, total_v_loss, total_p_loss = 0.0, 0.0, 0.0
@@ -123,16 +120,19 @@ def main(args):
     logger.info(f"Initializing TOFinverse Training on {device}")
     f_tr, a_tr, y_tr, f_te, a_te, y_te = load_dataset(
         args.dataset, args.noisedir, args.noise_method, 
-        args.gauss_low, args.gauss_high, args.noise_scale
+        args.gauss_low, args.gauss_high, args.noise_scale, global_seed
     )
-    train_loader = DataLoader(TensorDataset(f_tr, a_tr, y_tr), batch_size=args.batch, shuffle=True)
+    loader_generator = torch.Generator().manual_seed(global_seed)
+    train_loader = DataLoader(TensorDataset(f_tr, a_tr, y_tr), batch_size=args.batch, shuffle=True,
+                              generator=loader_generator)
     test_loader = DataLoader(TensorDataset(f_te, a_te, y_te), batch_size=args.batch)
     model = TOFinverse(nflow_in=f_tr.shape[1], nfeature_out=y_tr.shape[1]).to(device)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=10, factor=0.5)
     logger.info(f"Loading pre-trained surrogate: {args.surrogate_path}")
     surrogate = SurrogateConv1D(in_channels=2, out_channels=f_tr.shape[1]).to(device)
-    surrogate.load_state_dict(torch.load(args.surrogate_path, map_location=device, weights_only=True))
+    surrogate_checkpoint = torch.load(args.surrogate_path, map_location=device, weights_only=True)
+    surrogate.load_state_dict(surrogate_checkpoint.get("model_state_dict", surrogate_checkpoint))
     surrogate.eval()
     for p in surrogate.parameters(): p.requires_grad = False
     best_loss = float('inf')
@@ -148,7 +148,13 @@ def main(args):
         if te_v < best_loss - args.min_delta:
             best_loss = te_v
             patience_cnt = 0
-            torch.save(model.state_dict(), args.out_weights)
+            torch.save({
+                "schema_version": 1,
+                "model_state_dict": model.state_dict(),
+                "architecture": {"nflow_in": f_tr.shape[1], "nfeature_out": y_tr.shape[1]},
+                "training": {"global_seed": global_seed, "noise_method": args.noise_method,
+                             "lambda_phys": args.lambda_phys, "best_validation_velocity_mse": te_v},
+            }, args.out_weights)
         else:
             patience_cnt += 1
             if patience_cnt >= args.patience:
@@ -157,7 +163,8 @@ def main(args):
     np.savez(os.path.join(args.outdir, 'history.npz'), **history)
     plot_losses(history, args.outdir)
     logger.info("Loading best model weights for inference visualization...")
-    model.load_state_dict(torch.load(args.out_weights, map_location=device, weights_only=True))
+    best_checkpoint = torch.load(args.out_weights, map_location=device, weights_only=True)
+    model.load_state_dict(best_checkpoint.get("model_state_dict", best_checkpoint))
     plot_inference_example(model, surrogate, test_loader, device, args.outdir)
     logger.info(f"Training Complete. Best Validation Loss: {best_loss:.6f}")
     
