@@ -2,6 +2,12 @@ import numpy as np
 import torch
 from scipy import signal
 
+def available_cpu_count():
+    try:
+        return max(1, len(__import__("os").sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        return max(1, (__import__("os").cpu_count() or 1))
+
 def define_velocity_fourier(sample_amps, ntimepoint, phase, voffset):
     famps = sample_amps * np.exp(1j * phase)
     velocity = np.fft.irfft(famps, ntimepoint)
@@ -28,12 +34,18 @@ def upsample(y_input, n, tr):
     return y_interp
 
 def input_batched_signal_into_NN_area(s_data_for_nn, NN_model, xarea, area):
+    if s_data_for_nn.ndim != 2:
+        raise ValueError("Input signal must have shape (timepoints, slices).")
     ntime = s_data_for_nn.shape[0]
     num_slice_to_use = s_data_for_nn.shape[1]
     feature_length = xarea.size
     nwindows = ntime // feature_length
     remainder = ntime % feature_length
     
+    if feature_length < 2:
+        raise ValueError("Area profile must contain at least two timepoints.")
+    if area.shape != xarea.shape:
+        raise ValueError("Area and position profiles must have matching shapes.")
     velocity_NN = np.zeros((nwindows + (1 if remainder > 0 else 0)) * feature_length)
     
     def run_window(s_window, start_idx):
@@ -48,7 +60,8 @@ def input_batched_signal_into_NN_area(s_data_for_nn, NN_model, xarea, area):
         flow_x = torch.from_numpy(flow_np).float().to(device)
         area_x = torch.from_numpy(area_np).float().to(device)
         
-        y_predicted_tensor = NN_model(flow_x, area_x)
+        with torch.no_grad():
+            y_predicted_tensor = NN_model(flow_x, area_x)
         y_predicted = y_predicted_tensor.detach().cpu().numpy().squeeze()
         
         velocity_NN[start_idx:start_idx + feature_length] = y_predicted
@@ -68,11 +81,29 @@ def input_batched_signal_into_NN_area(s_data_for_nn, NN_model, xarea, area):
     return velocity_NN
 
 def scale_data(s):
+    s = np.asarray(s, dtype=float)
+    if s.ndim not in (1, 2) or s.shape[0] < 2:
+        raise ValueError("Signal scaling requires at least two timepoints.")
+    if not np.all(np.isfinite(s)):
+        raise ValueError("Signal contains NaN or infinite values.")
     raw_mean = np.mean(s, axis=0)
+    if np.any(np.abs(raw_mean) < 1e-8):
+        raise ValueError("Signal contains a near-zero mean channel and cannot be normalized safely.")
     detrended = signal.detrend(s, axis=0)
-    return detrended / raw_mean
+    scaled = detrended / raw_mean
+    if not np.all(np.isfinite(scaled)):
+        raise ValueError("Signal scaling produced non-finite values.")
+    return scaled
 
 def scale_area(xarea, area):
+    xarea, area = np.asarray(xarea), np.asarray(area)
+    if xarea.ndim != 1 or area.ndim != 1 or xarea.shape != area.shape:
+        raise ValueError("Area and position profiles must be matching one-dimensional arrays.")
     middle_index = xarea.size // 2
-    area_scaled = area / area[middle_index]
+    reference_area = area[middle_index]
+    if not np.isfinite(reference_area) or reference_area <= 0:
+        raise ValueError("Area profile midpoint must be finite and positive.")
+    area_scaled = area / reference_area
+    if not np.all(np.isfinite(area_scaled)) or np.any(area_scaled <= 0):
+        raise ValueError("Area profile must contain finite positive values.")
     return area_scaled
