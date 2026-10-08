@@ -31,13 +31,11 @@ def load_network(state_filename, param, device='cpu'):
     logger.info(f"Loading weights from {state_filename} to {device}")
     checkpoint = torch.load(state_filename, map_location=torch.device(device), weights_only=True)
     state_dict = checkpoint.get('model_state_dict', checkpoint)
-    
-    model = TOFinverse(
-        nflow_in=param.nslice_to_use, 
-        nfeature_out=1, 
-        context_dim=32
-    ).to(device)
-    
+    architecture = checkpoint.get("architecture", {}) if isinstance(checkpoint, dict) else {}
+    expected_slices = architecture.get("nflow_in", param.nslice_to_use)
+    if expected_slices != param.nslice_to_use:
+        raise ValueError(f"Model expects {expected_slices} input slices, but config specifies {param.nslice_to_use}.")
+    model = TOFinverse(nflow_in=param.nslice_to_use, nfeature_out=1, context_dim=32).to(device)
     model.load_state_dict(state_dict)
     model.eval()
     return model
@@ -45,15 +43,19 @@ def load_network(state_filename, param, device='cpu'):
 def load_data(spath, area_path, param):
     offset = param.scan_param.num_pulse_baseline_offset
     n_slices = param.nslice_to_use
-    
-    sraw = np.loadtxt(spath)[offset:, :n_slices]
+    signal = np.loadtxt(spath)
+    if signal.ndim == 1:
+        signal = signal[:, None]
+    if signal.ndim != 2 or signal.shape[0] < offset + param.scan_param.num_pulse:
+        raise ValueError("Signal has fewer frames than baseline offset plus num_pulse.")
+    if signal.shape[1] < n_slices:
+        raise ValueError(f"Signal has {signal.shape[1]} slices, but {n_slices} are required.")
+    sraw = signal[offset:, :n_slices]
     A = np.loadtxt(area_path)
     xarea_raw, area_raw = A[:, 0], A[:, 1]
-
     new_len = param.scan_param.num_pulse
     x_new = np.linspace(0, 1, new_len)
     x_old = np.linspace(0, 1, xarea_raw.size)
-    
     xarea = np.interp(x_new, x_old, xarea_raw)
     area = np.interp(x_new, x_old, area_raw)
     return sraw, xarea, area
@@ -68,11 +70,8 @@ def run_forward_model(velocity_NN, xarea, area, param, ncpu=8, enable_logging=Fa
     sp = param.scan_param
     v_up = utils.upsample(velocity_NN, velocity_NN.size * 100 + 1, sp.repetition_time).flatten()
     t = np.arange(0, sp.repetition_time * velocity_NN.size, sp.repetition_time / 100)
-    
     t_base, v_base = utils.add_baseline_period(t, v_up, sp.repetition_time * sp.num_pulse_baseline_offset)
-    
     pos_func = partial(pfl.compute_position_numeric_spatial, tr_vect=t_base, vts=v_base, xarea=xarea, area=area)
-    
     if enable_logging:
         logger.info(f"Starting forward model simulation using {ncpu} cores...")
     t0 = time.time()
@@ -88,11 +87,9 @@ def run_forward_model(velocity_NN, xarea, area, param, ncpu=8, enable_logging=Fa
 def save_and_plot(outdir, velocity, sraw_scaled, ssim_scaled, tr):
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    
     np.savetxt(outdir / 'signal_data.txt', sraw_scaled)
     np.savetxt(outdir / 'velocity_predicted.txt', velocity)
     np.savetxt(outdir / 'signal_simulation.txt', ssim_scaled)
-
     fig, axes = plt.subplots(3, 2, figsize=(16, 10), constrained_layout=True)
     t_vec = tr * np.arange(velocity.size)
     n = velocity.size
@@ -107,14 +104,12 @@ def save_and_plot(outdir, velocity, sraw_scaled, ssim_scaled, tr):
     ssim_spec = get_spectrum(ssim_scaled)
     vel_spec = get_spectrum(velocity)
 
-    # Scaling axes for comparison
     ylim_time = (min(np.min(sraw_view), np.min(ssim_scaled)) * 1.1, max(np.max(sraw_view), np.max(ssim_scaled)) * 1.1)
     ylim_freq = (max(1e-6, np.min(sraw_spec[1:])), np.max(sraw_spec[1:]) * 2.0)
 
-    # Plotting logic remains same...
     axes[0, 0].plot(t_vec, sraw_view); axes[0, 0].set_title("Input Signal (Time Domain)")
     axes[0, 0].set_ylim(ylim_time)
-    
+
     axes[0, 1].plot(freqs[1:], sraw_spec[1:]); axes[0, 1].set_title("Input Signal (Frequency Domain)")
     axes[0, 1].set_yscale('log'); axes[0, 1].set_ylim(ylim_freq)
 
