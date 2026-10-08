@@ -39,7 +39,7 @@ def compute_init_positions(input_data):
     lb, ub = tm.get_init_position_bounds(x_func, np.unique(timings), p.slice_width, p.num_slice)
     return np.arange(lb, ub + 0.01, 0.01)
 
-def generate_batch(param, optim_data_list, area_lookup, task_id):
+def generate_batch(param, optim_data_list, area_lookup, task_id, workers=None):
     ds = param.synthetic
     batch_size = ds.num_samples // ds.num_batches
     logger.info(f"[Task {task_id}] Initializing batch generation: size={batch_size}, mode='{ds.areamode}'")
@@ -56,7 +56,7 @@ def generate_batch(param, optim_data_list, area_lookup, task_id):
         if (i + 1) % 25 == 0 or i == 0:
             logger.info(f"[Task {task_id}] Progress: {i + 1}/{batch_size} samples prepared")
         ind_random = rng.integers(0, n_optim)
-        vbase, optim_param, sub_name = optim_data_list[ind_random]
+        vbase, optim_param, source_id = optim_data_list[ind_random]
         jitter_vector = rng.uniform(ds.jitter_lb, ds.jitter_ub, size=len(optim_param))
         res_x_jittered = optim_param * jitter_vector
         phase_base = np.angle(np.fft.rfft(vbase))
@@ -66,10 +66,10 @@ def generate_batch(param, optim_data_list, area_lookup, task_id):
         V_freq = np.fft.rfft(vopt_demean, axis=0)
         amp_raw = np.abs(V_freq)
         if ds.areamode == 'collection':
-            if sub_name in area_lookup:
-                xarea_raw, area_raw = area_lookup[sub_name]
+            if source_id in area_lookup:
+                xarea_raw, area_raw = area_lookup[source_id]
             else:
-                logger.warning(f"[Task {task_id}] Subject {sub_name} not in area collection. Selecting fallback.")
+                logger.warning(f"[Task {task_id}] Source {source_id} not in area collection. Selecting fallback.")
                 random_sub = rng.choice(keys_area)
                 xarea_raw, area_raw = area_lookup[random_sub]
             x_new = np.linspace(0, 1, param.scan_param.num_pulse)
@@ -89,8 +89,8 @@ def generate_batch(param, optim_data_list, area_lookup, task_id):
             'task_id': task_id
         })
     start_time = time.time()
-    n_cpus = len(os.sched_getaffinity(0))
-    n_workers = min(batch_size, n_cpus)
+    n_cpus = utils.available_cpu_count()
+    n_workers = min(batch_size, workers or n_cpus, n_cpus)
     logger.info(f"[Task {task_id}] Launching Pool with {n_workers} workers.")
     try:
         with Pool(processes=n_workers) as pool:
@@ -109,6 +109,7 @@ if __name__ == "__main__":
     parser.add_argument("--optim_path", required=True)
     parser.add_argument("--area_path", required=True)
     parser.add_argument("--taskid", type=int, default=1)
+    parser.add_argument("--workers", type=int, default=None)
     args = parser.parse_args()
     
     logger.info(f"--- Synthetic Data Generator Started (Task ID: {args.taskid}) ---")
@@ -124,9 +125,9 @@ if __name__ == "__main__":
         logger.info(f"Area Mode: Collection. Loading from {args.area_path}")
         with open(args.area_path, 'rb') as f:
             area_raw_list = pickle.load(f)
-        area_lookup = {sub: (xa, a) for xa, a, sub in area_raw_list}
+        area_lookup = {source_id: (xa, a) for xa, a, source_id in area_raw_list}
         logger.info(f"Loaded {len(area_lookup)} unique subject area profiles.")
-    batch_data = generate_batch(param, optim_data_list, area_lookup, args.taskid)
+    batch_data = generate_batch(param, optim_data_list, area_lookup, args.taskid, args.workers)
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
     with open(args.output, "wb") as f:
         pickle.dump(batch_data, f)
