@@ -131,7 +131,8 @@ def combine_simulations(sim_dir, output_dir, workers=None, expected_samples=None
 
     os.makedirs(output_dir, exist_ok=True)
     master_file = os.path.join(output_dir, "dataset.pkl")
-    atomic_pickle_dump([X_final, y_final], master_file)
+    with open(master_file, "wb") as f:
+        pickle.dump([X_final, y_final], f)
         
     logger.info(f"Saved master dataset to {master_file}")
     logger.info(f"Final Tensor Shapes -> X: {X_final.shape}, y: {y_final.shape}")
