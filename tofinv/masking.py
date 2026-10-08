@@ -1,6 +1,7 @@
 import argparse
 import pathlib
 import subprocess
+import shutil
 import nibabel as nib
 import numpy as np
 from scipy import ndimage
@@ -36,13 +37,16 @@ def main():
     outdir = pathlib.Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     sbref_fixed = outdir / "SBRef_fixed.nii.gz"
+    mask_path = outdir / "dilated_mask.npy"
     fix_sbref(args.sbref, sbref_fixed)
     container = args.container
     if args.dummy_run:
         print("[*] Running in dummy mode, skipping SynthSeg and using pre-generated mask.")
         func_dir = pathlib.Path(args.func).parent
         dummy_mask_path = func_dir / "aseg_sbref_space.nii.gz"
-        subprocess.run(["cp", str(dummy_mask_path), str(outdir / "SBRef_fixed_synthseg.nii.gz")])
+        if not dummy_mask_path.is_file():
+            raise FileNotFoundError(f"Dummy segmentation does not exist: {dummy_mask_path}")
+        shutil.copy2(dummy_mask_path, outdir / "SBRef_fixed_synthseg.nii.gz")
     else:
         cmd = ["mri_synthseg", "--i", str(sbref_fixed), "--o", str(outdir)]
         use_container = args.container and args.container.lower() != "none"
@@ -56,17 +60,24 @@ def main():
         else:
             print("[*] Running SynthSeg via local FreeSurfer module")
         subprocess.run(cmd, check=True)
-        
-    synthseg_file = outdir / "SBRef_fixed_synthseg.nii.gz"
-    resampled = sf.load_volume(synthseg_file).resample_like(sf.load_volume(sbref_fixed), method='nearest')
-    mask = resampled == args.csf_label
-    dilated = ndimage.binary_dilation(mask[:, :, :args.nslice_to_keep+1], structure=ndimage.generate_binary_structure(3, 3), iterations=2)
-    for islice in range(args.nslice_to_keep):
-        if np.sum(dilated[:, :, islice]) == 0:
-            dilated[:, :, islice] = dilated[:, :, islice + 1]
-    if np.sum(dilated[:, :, -1]) == 0:
-        dilated[:, :, -1] = dilated[:, :, -2]
-    mask_path = outdir / "dilated_mask.npy"
+        synthseg_file = outdir / "SBRef_fixed_synthseg.nii.gz"
+        resampled = sf.load_volume(synthseg_file).resample_like(sf.load_volume(sbref_fixed), method='nearest')
+        mask = resampled == args.csf_label
+        dilated = ndimage.binary_dilation(mask[:, :, :args.nslice_to_keep+1], structure=ndimage.generate_binary_structure(3, 3), iterations=2)
+        for islice in range(args.nslice_to_keep):
+            if np.sum(dilated[:, :, islice]) == 0:
+                dilated[:, :, islice] = dilated[:, :, islice + 1]
+        if np.sum(dilated[:, :, -1]) == 0:
+            dilated[:, :, -1] = dilated[:, :, -2]
+        if dilated.sum() == 0:
+            print("[!] Warning: SynthSeg produced empty mask. Falling back to intensity-based segmentation method.")
+            rough_xrange = (36, 44)
+            rough_yrange = (26, 34)
+            zrange = (0, args.nslice_to_keep)
+            dilated = np.zeros((*nib.load(sbref_fixed).shape[:2], args.nslice_to_keep), dtype=bool)
+            dilated[rough_xrange[0]:rough_xrange[1], rough_yrange[0]:rough_yrange[1], zrange[0]:zrange[1]] = True
+    
+    print(f"sum of mask is {dilated.sum()}")
     np.save(mask_path, dilated)
     print(f"[*] Running automask for {args.func}")
     
