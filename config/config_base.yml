@@ -11,9 +11,11 @@ paths:
   bind_container: null
 
 automask:
+  csf_label: 15
   metrics_list:
     - sd
-
+    - sbref
+    
 # keyword parameters for gp_minimize used in the optimization module
 optim_gp_minimize:
   dimensions:
@@ -85,77 +87,87 @@ scan_param:
 
 resources:
 
-  threads_high: 100
-  threads_low: 10
-
   # resources for running in SLURM. Ignore if running locally
   automask:
-    runtime: 120
+    runtime: 30
     nodes: 1
     cpus: 1
     mem_mb: 24000
+
   noise:
     runtime: 30
     nodes: 1
     cpus: 1
-    mem_mb: 20000
+    mem_mb: 12000
+
   area:
-    runtime: 120
+    runtime: 30
     nodes: 1
     cpus: 1
-    mem_mb: 16000
+    mem_mb: 12000
+
   optim:
-    runtime: 320
+    runtime: 60
     nodes: 1
     cpus: 20
-    mem_mb: 42000
+    mem_mb: 8000
+
   aggregate_noise:
     runtime: 20
     nodes: 1
     cpus: 1
-    mem_mb: 20000
-  aggregate_area:
-    runtime: 15
     mem_mb: 4000
+
+  aggregate_area:
+    runtime: 20
+    mem_mb: 4000
+
   aggregate_optim:
-    runtime: 120
+    runtime: 20
     nodes: 1
     cpus: 20
-    mem_mb: 64000
+    mem_mb: 4000
+
   synthdata_sampling:
-    runtime: 120
+    runtime: 60
     nodes: 1
     cpus: 1
-    mem_mb: 8000
+    mem_mb: 4000
+
   synthdata_sort:
     runtime: 60
     nodes: 1
     cpus: 1
     mem_mb: 32000
+
   synthdata_simulate:
-    runtime: 240
+    runtime: 120
     nodes: 1
     cpus: 5
-    mem_mb: 16000
+    mem_mb: 4000
+
   synthdata_combine:
     runtime: 240
     nodes: 1
     cpus: 64
-    mem_mb: 100000
+    mem_mb: 32000
+
   train_surrogate:
     runtime: 360
     nodes: 1
     cpus: 4
-    mem_mb: 64000
-    gpus: 4
+    mem_mb: 16000
+    gpus: 1
+
   train_model:
     runtime: 240
     nodes: 1
     cpus: 1
-    mem_mb: 64000
+    mem_mb: 16000
     gpus: 1
+
   evaluate:
     runtime: 240
     nodes: 1
     cpus: 1
-    mem_mb: 24000
+    mem_mb: 4000
